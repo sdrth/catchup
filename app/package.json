@@ -1,0 +1,32 @@
+{
+  "name": "catchup",
+  "productName": "Catchup",
+  "version": "1.1.0",
+  "description": "Catchup helps your AI tools read your WhatsApp — only the chats you approve.",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "postinstall": "node scripts/fix-electron-path.js",
+    "package": "node scripts/package.js",
+    "mcp": "node src/mcp/server.mjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "37.2.6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "better-sqlite3": "13.0.3",
+    "zod": "4.6.2"
+  }
+}

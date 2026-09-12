@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Catchup</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar" aria-label="Catchup">
+        <div class="traffic-light-spacer" aria-hidden="true"></div>
+
+        <div class="sidebar-brand">
+          <img
+            class="brand-icon"
+            src="./assets/icon.png"
+            width="36"
+            height="36"
+            alt="Catchup"
+            title="Catchup"
+            draggable="false"
+          />
+        </div>
+
+        <nav
+          id="app-nav"
+          class="app-nav"
+          role="tablist"
+          aria-label="Navigation"
+          aria-orientation="vertical"
+        ></nav>
+
+        <div class="sidebar-footer">
+          <div class="status-capsule" title="Message sync stays on this Mac">
+            <span class="status-dot"></span>
+            <span class="status-text">Local</span>
+          </div>
+        </div>
+      </aside>
+
+      <main id="workspace" class="workspace" role="tabpanel" aria-label="Content">
+        <!-- Access: what can agents see from the open WhatsApp chat? -->
+        <section id="summaries-panel" class="drawer-panel sheet-panel" hidden>
+          <header class="sheet-top">
+            <div class="sheet-top-text">
+              <p class="eyebrow">Access</p>
+              <h1 class="sheet-title">What can agents see?</h1>
+            </div>
+            <button type="button" id="close-summaries" class="icon-close" aria-label="Close">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M6 6l12 12M18 6L6 18"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </header>
+
+          <div class="sheet-body" id="summary-detail">
+            <div class="empty-guide" id="summary-detail-empty">
+              <div class="empty-steps" aria-hidden="true">
+                <span>1</span>
+                <span>2</span>
+              </div>
+              <p class="empty-guide-title">Open a WhatsApp chat</p>
+              <p class="empty-guide-body">
+                Pick any conversation on the left. Here you’ll decide whether your AI tools
+                may read it — default is private.
+              </p>
+            </div>
+
+            <div id="summary-detail-body" class="consent-stack" hidden>
+              <section class="consent-hero" aria-labelledby="summary-chat-title">
+                <div class="consent-kicker">
+                  <span id="chat-share-status" class="status-pill is-private">Private</span>
+                  <span id="summary-chat-meta" class="consent-kind"></span>
+                </div>
+                <h2 id="summary-chat-title" class="consent-name">Chat</h2>
+
+                <label class="consent-switch">
+                  <span class="consent-switch-text">
+                    <strong>Allow agents to read this chat</strong>
+                    <span>Stored on this Mac. Agents cannot send messages.</span>
+                  </span>
+                  <input type="checkbox" id="chat-sync-enabled" class="switch-input" />
+                </label>
+              </section>
+
+              <section class="consent-secondary" aria-labelledby="summary-toggle-label">
+                <label class="consent-switch compact">
+                  <span class="consent-switch-text">
+                    <strong id="summary-toggle-label">Catch-up summaries</strong>
+                    <span>Optional AI notes via your Gateway key in Settings</span>
+                  </span>
+                  <input type="checkbox" id="summary-enabled" class="switch-input" />
+                </label>
+
+                <div id="summary-options" class="summary-options" hidden>
+                  <fieldset class="mode-fieldset">
+                    <legend class="field-label">Refresh when</legend>
+                    <label class="radio-row">
+                      <input type="radio" name="summary-mode" value="messages" checked />
+                      <span>After new messages</span>
+                    </label>
+                    <label class="radio-row">
+                      <input type="radio" name="summary-mode" value="time" />
+                      <span>On a timer</span>
+                    </label>
+                  </fieldset>
+
+                  <div class="field-grid">
+                    <div class="control-row" id="summary-messages-fields">
+                      <label class="field-label" for="summary-threshold">Count</label>
+                      <input
+                        id="summary-threshold"
+                        class="field-input"
+                        type="number"
+                        min="3"
+                        max="200"
+                        value="20"
+                      />
+                    </div>
+                    <div class="control-row" id="summary-time-fields" hidden>
+                      <label class="field-label" for="summary-interval">Minutes</label>
+                      <input
+                        id="summary-interval"
+                        class="field-input"
+                        type="number"
+                        min="5"
+                        max="10080"
+                        value="60"
+                      />
+                    </div>
+                    <div class="control-row">
+                      <label class="field-label" for="summary-max-tokens">Max tokens</label>
+                      <input
+                        id="summary-max-tokens"
+                        class="field-input"
+                        type="number"
+                        min="64"
+                        max="4096"
+                        step="64"
+                        value="512"
+                      />
+                    </div>
+                  </div>
+
+                  <label class="field-label" for="summary-extra-prompt">Extra instructions</label>
+                  <textarea
+                    id="summary-extra-prompt"
+                    class="field-textarea"
+                    rows="2"
+                    placeholder="Optional for this chat"
+                  ></textarea>
+
+                  <div class="action-bar" id="summary-actions">
+                    <button type="button" id="summary-save" class="btn btn-quiet">
+                      Save schedule
+                    </button>
+                    <button type="button" id="summary-run" class="btn btn-accent">
+                      Summarize now
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <p id="summary-status" class="toast-line" role="status" aria-live="polite"></p>
+
+              <div class="cards-block" id="summary-cards-wrap">
+                <h3 class="cards-heading">Notes</h3>
+                <div id="summary-cards" class="summary-cards" aria-live="polite"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings: MCP + local store + Gateway -->
+        <section id="settings-page" class="settings-page" hidden>
+          <header class="settings-hero settings-page-hero">
+            <p class="eyebrow">Settings</p>
+            <h1 class="settings-title">Preferences</h1>
+            <p class="settings-lead">
+              Connect agents here. Message sync stays on this Mac. Gateway is only
+              for optional catch-up summaries.
+            </p>
+          </header>
+
+          <section class="panel panel-accent" aria-labelledby="mcp-heading">
+            <div class="panel-header">
+              <div>
+                <h2 id="mcp-heading" class="panel-title">Connect an AI</h2>
+                <p class="panel-subtitle">
+                  Claude Desktop, Cursor, Codex, and anything that speaks MCP.
+                  Read-only — only chats you allow under Access.
+                </p>
+              </div>
+            </div>
+
+            <button type="button" id="copy-mcp-command" class="btn btn-accent">
+              Copy MCP command
+            </button>
+            <input
+              id="mcp-command"
+              class="field-input mono connect-command"
+              readonly
+              tabindex="-1"
+            />
+            <p id="copy-status" class="toast-line" role="status" aria-live="polite"></p>
+
+            <div class="connect-links">
+              <button type="button" id="copy-mcp-json" class="text-link">
+                Claude Desktop JSON
+              </button>
+              <button type="button" id="copy-agent-prompt" class="text-link">
+                Copy prompt
+              </button>
+              <button type="button" id="copy-agent-skill" class="text-link">
+                Copy skill
+              </button>
+            </div>
+            <pre id="mcp-snippet" class="sr-only" aria-hidden="true"></pre>
+            <p class="footnote" id="db-path-hint"></p>
+          </section>
+
+          <section class="panel" aria-labelledby="local-heading">
+            <div class="panel-header panel-header-split">
+              <div>
+                <h2 id="local-heading" class="panel-title">On this Mac</h2>
+                <p class="panel-subtitle" id="agents-proof-hint">
+                  Approve chats under Access while WhatsApp is open.
+                </p>
+              </div>
+              <button type="button" id="refresh-preview" class="btn btn-quiet btn-mini">
+                Refresh
+              </button>
+            </div>
+
+            <div class="proof-inline" id="agents-proof" aria-live="polite">
+              <p class="proof-figure" id="agents-proof-count">0</p>
+              <p class="proof-label" id="agents-proof-label">chats shared with agents</p>
+            </div>
+
+            <div class="stats-row stats-quiet" id="settings-stats" aria-live="polite"></div>
+            <div id="sync-preview" class="preview-list settings-preview" aria-live="polite"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="ai-heading">
+            <div class="panel-header">
+              <div>
+                <h2 id="ai-heading" class="panel-title">Vercel AI Gateway</h2>
+                <p class="panel-subtitle">
+                  Needed when catch-up summaries are on.
+                  <a
+                    class="inline-link"
+                    href="https://vercel.com/docs/ai-gateway"
+                    id="ai-gateway-docs"
+                    >Docs</a
+                  >
+                </p>
+              </div>
+            </div>
+
+            <label class="field-label" for="ai-api-key">API key</label>
+            <input
+              id="ai-api-key"
+              class="field-input mono"
+              type="password"
+              autocomplete="off"
+              placeholder="Leave blank to keep existing key"
+            />
+            <p class="panel-subtitle" id="ai-key-hint">No key saved yet.</p>
+
+            <label class="field-label" for="ai-base-url">Base URL</label>
+            <input
+              id="ai-base-url"
+              class="field-input mono"
+              type="url"
+              value="https://ai-gateway.vercel.sh/v1"
+            />
+
+            <label class="field-label" for="ai-model">Model</label>
+            <input
+              id="ai-model"
+              class="field-input mono"
+              type="text"
+              placeholder="anthropic/claude-sonnet-4.5"
+            />
+
+            <label class="toggle-row ai-zdr-row">
+              <input type="checkbox" id="ai-zdr" checked />
+              <span>Zero Data Retention (ZDR)</span>
+            </label>
+
+            <label class="field-label" for="ai-system-prompt">System prompt</label>
+            <textarea
+              id="ai-system-prompt"
+              class="field-textarea"
+              rows="8"
+              spellcheck="true"
+            ></textarea>
+
+            <div class="control-row">
+              <button type="button" id="save-ai-settings" class="btn btn-accent">
+                Save settings
+              </button>
+            </div>
+            <p id="ai-save-status" class="toast-line" role="status" aria-live="polite"></p>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="./renderer.js" defer></script>
+  </body>
+</html>
