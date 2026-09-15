@@ -19,6 +19,7 @@ Catchup lets AI tools read WhatsApp chats you explicitly allow — nothing else.
 
 ## Privacy
 
+- Catchup has **no telemetry** and **no Catchup backend** — nothing phones home to us.
 - Message sync and MCP stay on this Mac.
 - Agents are read-only and only see allowlisted chats.
 - Turning Access off clears that chat’s local messages and summaries.

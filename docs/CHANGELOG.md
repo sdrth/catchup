@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add MIT [LICENSE](../LICENSE) (as-is, no warranty / no liability).
+- Add [SECURITY.md](../SECURITY.md) (local store, zero telemetry / no Catchup backend, MCP trust model, reporting).
+- Bump Electron `37.2.6` → `44.3.0`.
+
 ## 1.1.0 — 2026-09-13
 
 Local WhatsApp sync for agents: approve chats, read-only MCP, optional Gateway summaries.

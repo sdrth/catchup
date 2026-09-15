@@ -13,6 +13,8 @@ WhatsApp stays in Catchup as usual. Approved chats sync to a local SQLite databa
 | [TESTING](docs/TESTING.md) | Manual test flows |
 | [BUILD](docs/BUILD.md) | Run from source, package, sign |
 | [CHANGELOG](docs/CHANGELOG.md) | Release notes |
+| [LICENSE](LICENSE) | MIT — provided as-is, no warranty |
+| [SECURITY](SECURITY.md) | Local data, MCP trust, reporting |
 
 ## Run
 
@@ -46,6 +48,10 @@ pnpm package
 
 See [docs/BUILD.md](docs/BUILD.md).
 
+## License
+
+Catchup is released under the [MIT License](LICENSE). The software is provided **as is**, without warranty of any kind. Authors and copyright holders have **no liability** for any claim, damages, or other liability arising from use of the software. You use Catchup entirely at your own risk.
+
 ## Note
 
-Catchup is unofficial and not affiliated with WhatsApp or Meta. It drives WhatsApp Web locally; use at your own risk and respect applicable terms and privacy laws.
+Catchup is unofficial and not affiliated with WhatsApp or Meta. It drives WhatsApp Web locally, with **no Catchup telemetry or backend**. Use at your own risk and respect applicable terms and privacy laws.
