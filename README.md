@@ -39,6 +39,14 @@ pnpm mcp
 
 Or copy the command / JSON / prompt / skill from **Settings**.
 
+## For your agent (copy)
+
+```
+Set up Catchup for WhatsApp from https://github.com/sdrth/catchup if it isn’t running yet: clone (or open the repo), then `cd app && pnpm install && pnpm start`, help me log into WhatsApp, and allow chats under Access.
+
+Then connect Catchup MCP using the default server from the Electron app — Settings → copy MCP command (`node "<repo>/app/src/mcp/server.mjs"`, or `cd app && pnpm mcp`) — and read messages only through that MCP: catchup_status, list_allowed_chats, get_recent_messages, search_messages. Never invent WhatsApp messages.
+```
+
 ## Package (optional)
 
 ```bash
