@@ -367,7 +367,6 @@ body {
   z-index: 1;
   display: block;
   background: transparent;
-  --drawer-width: 400px;
 }
 
 .eyebrow {
@@ -406,6 +405,36 @@ body {
 
 .drawer-panel[hidden] {
   display: none !important;
+}
+
+.drawer-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 3;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.drawer-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  transition: background 120ms var(--ease), width 120ms var(--ease), left 120ms var(--ease);
+}
+
+.drawer-resize-handle:hover::after,
+.drawer-resize-handle.is-dragging::after {
+  left: 1px;
+  width: 5px;
+  background: var(--accent);
 }
 
 .sheet-top {
@@ -582,6 +611,14 @@ body {
   background: linear-gradient(180deg, #9af0b4, var(--good));
   border: 1px solid rgba(255, 255, 255, 0.35);
   box-shadow: 0 6px 16px rgba(48, 209, 88, 0.25);
+}
+
+.status-pill.is-warning {
+  color: #3a2604;
+  background: linear-gradient(180deg, #fde68a, #fbbf24);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  padding: 3px 8px;
+  font-size: 10px;
 }
 
 .consent-switch {
@@ -892,17 +929,88 @@ body {
   color: var(--label);
 }
 
+.summary-card-meta-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .summary-card-meta {
   color: var(--tertiary);
   font-size: 11px;
 }
 
 .summary-card-body {
-  padding: 0 12px 12px;
+  padding: 0 14px 14px;
   color: var(--secondary);
-  white-space: pre-wrap;
-  line-height: 1.45;
+  font-size: 14.5px;
+  line-height: 1.55;
   user-select: text;
+}
+
+.summary-card-body p {
+  margin: 0 0 10px;
+}
+
+.summary-card-body p:last-child {
+  margin-bottom: 0;
+}
+
+.summary-card-body strong {
+  color: var(--label);
+  font-weight: 650;
+}
+
+.summary-card-body code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.summary-card-body .summary-heading {
+  color: var(--label);
+  font-weight: 650;
+  margin: 16px 0 6px;
+}
+
+.summary-card-body .summary-heading:first-child {
+  margin-top: 0;
+}
+
+.summary-card-body .summary-heading-1,
+.summary-card-body .summary-heading-2 {
+  font-size: 1.08em;
+}
+
+.summary-card-body .summary-list {
+  margin: 0 0 10px;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+}
+
+.summary-card-body .summary-list .summary-list {
+  margin: 4px 0 0;
+}
+
+.summary-card-body .summary-list li {
+  line-height: 1.5;
+}
+
+.summary-load-sentinel {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--tertiary);
+}
+
+.summary-load-sentinel.is-loading::after {
+  content: "Loading more…";
 }
 
 .summary-card.is-collapsed .summary-card-body {

@@ -35,14 +35,17 @@ const {
   setAiSettings,
   setSummaryPrefs,
   getSummaryBoard,
+  getEarlierSummaries,
   resolveCatalogChat,
+  getDrawerWidth,
+  setDrawerWidth,
+  clampDrawerWidth,
   closeDb,
 } = require("./db/store");
 const { attachWhatsAppCapture } = require("./whatsapp/capture");
 const { runSummaryForChat, tickSummaries } = require("./ai/summarize");
 
 const SIDEBAR_WIDTH = 84;
-const DRAWER_PANEL_WIDTH = 400;
 const APP_NAME = "Catchup";
 const APP_ICON_PNG = path.join(__dirname, "..", "build", "icon.png");
 
@@ -80,6 +83,9 @@ let activeAppId = apps[0]?.id ?? "";
 /** @type {null | 'summaries'} */
 let rightDrawer = null;
 
+/** @type {number} user-resizable width of the right-hand Access drawer. */
+let drawerWidth = getDrawerWidth();
+
 /** @type {{ id: string, name: string, kind: string, phone: string | null } | null} */
 let activeWaChat = null;
 
@@ -94,7 +100,7 @@ function getWhatsAppView() {
 
 function getContentBounds() {
   const [width, height] = mainWindow.getContentSize();
-  const rightGap = rightDrawer ? DRAWER_PANEL_WIDTH : 0;
+  const rightGap = rightDrawer ? drawerWidth : 0;
   return {
     x: SIDEBAR_WIDTH,
     y: 0,
@@ -108,7 +114,7 @@ function emitShellState() {
   mainWindow.webContents.send("shell:state", {
     activeAppId,
     rightDrawer,
-    drawerWidth: DRAWER_PANEL_WIDTH,
+    drawerWidth,
   });
 }
 
@@ -522,6 +528,21 @@ ipcMain.on("app:switch", (_event, appId) => {
   }
 });
 
+// Live feedback while dragging the drawer's resize handle — resizes the
+// WhatsApp BrowserView in step, but doesn't hit the database on every move.
+ipcMain.on("shell:dragDrawerWidth", (_event, width) => {
+  drawerWidth = clampDrawerWidth(width);
+  layoutActiveView();
+});
+
+// Drag end — persist the final width so it's restored on next launch.
+ipcMain.handle("shell:setDrawerWidth", (_event, width) => {
+  drawerWidth = setDrawerWidth(width);
+  layoutActiveView();
+  emitShellState();
+  return drawerWidth;
+});
+
 ipcMain.on("whatsapp:snapshot", (_event, envelope) => {
   if (!envelope || envelope.source !== "catchup-whatsapp") return;
 
@@ -642,8 +663,14 @@ ipcMain.handle("summary:setPrefs", (_event, chatId, patch) => {
   return row;
 });
 ipcMain.handle("summary:board", (_event, chatId) => {
-  if (typeof chatId !== "string") return { chatId: "", latest: null, previous: [] };
+  if (typeof chatId !== "string") {
+    return { chatId: "", latest: null, previous: [], hasMore: false };
+  }
   return getSummaryBoard(chatId);
+});
+ipcMain.handle("summary:earlier", (_event, chatId, opts) => {
+  if (typeof chatId !== "string") return { items: [], hasMore: false };
+  return getEarlierSummaries(chatId, opts || {});
 });
 ipcMain.handle("summary:runNow", async (_event, chatId) => {
   if (typeof chatId !== "string") throw new Error("chatId required");

@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("catchup", {
   getApps: () => ipcRenderer.invoke("apps:get"),
   switchApp: (appId) => ipcRenderer.send("app:switch", appId),
+  dragDrawerWidth: (width) => ipcRenderer.send("shell:dragDrawerWidth", width),
+  setDrawerWidth: (width) => ipcRenderer.invoke("shell:setDrawerWidth", width),
   onShellState: (callback) => {
     const handler = (_event, state) => callback(state);
     ipcRenderer.on("shell:state", handler);
@@ -27,6 +29,8 @@ contextBridge.exposeInMainWorld("catchup", {
   setSummaryPrefs: (chatId, patch) =>
     ipcRenderer.invoke("summary:setPrefs", chatId, patch),
   getSummaryBoard: (chatId) => ipcRenderer.invoke("summary:board", chatId),
+  getEarlierSummaries: (chatId, opts) =>
+    ipcRenderer.invoke("summary:earlier", chatId, opts),
   runSummaryNow: (chatId) => ipcRenderer.invoke("summary:runNow", chatId),
   /** Clipboard must go through main — sandboxed preload clipboard is unreliable on macOS. */
   copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
