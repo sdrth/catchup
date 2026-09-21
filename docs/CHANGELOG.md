@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **pnpm 12 install:** move build policy to `app/pnpm-workspace.yaml` (`allowBuilds`: Electron on, `better-sqlite3` off — uses shipped prebuilds). Stops `ERR_PNPM_IGNORED_BUILDS` / `node-gyp: command not found` on install.
 - Add MIT [LICENSE](../LICENSE) (as-is, no warranty / no liability).
 - Add [SECURITY.md](../SECURITY.md) (local store, zero telemetry / no Catchup backend, MCP trust model, reporting).
 - Bump Electron `37.2.6` → `44.3.0`.

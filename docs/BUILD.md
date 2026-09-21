@@ -12,6 +12,8 @@ pnpm start
 
 `pnpm install` renames the local Electron helper to **Catchup.app** so the Dock label is Catchup during development.
 
+Build scripts: `app/pnpm-workspace.yaml` allows Electron’s install script and skips `better-sqlite3`’s `node-gyp` rebuild (v13 ships platform prebuilds). There is no `pnpm build` script — use `pnpm start` or `pnpm package`.
+
 | Path | Role |
 | --- | --- |
 | `app/src/main.js` | Window, BrowserView, IPC, summary scheduler |

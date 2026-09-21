@@ -19,11 +19,6 @@
     "@electron/packager": "20.3.0",
     "electron": "44.3.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron"
-    ]
-  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "better-sqlite3": "13.0.3",
