@@ -94,6 +94,16 @@ function migrate(database) {
     database.exec(`ALTER TABLE chats ADD COLUMN phone TEXT`);
   }
 
+  const summaryColumns = database
+    .prepare(`PRAGMA table_info(summaries)`)
+    .all()
+    .map((row) => row.name);
+  if (!summaryColumns.includes("truncated")) {
+    database.exec(
+      `ALTER TABLE summaries ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
+
   const summaryPrefColumns = database
     .prepare(`PRAGMA table_info(summary_prefs)`)
     .all()
@@ -938,15 +948,7 @@ function setSummaryPrefs(chatId, patch) {
   return getChatById(chatId);
 }
 
-/**
- * @param {string} chatId
- * @param {{ limit?: number }} [opts]
- */
-function listSummaries(chatId, opts = {}) {
-  const limit = Math.min(50, Math.max(1, Number(opts.limit) || 20));
-  return getDb()
-    .prepare(
-      `
+const SUMMARY_SELECT = `
       SELECT
         id,
         chat_id AS chatId,
@@ -956,14 +958,40 @@ function listSummaries(chatId, opts = {}) {
         from_ts AS fromTs,
         to_ts AS toTs,
         model,
+        truncated,
         created_at AS createdAt
       FROM summaries
-      WHERE chat_id = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `,
-    )
-    .all(chatId, limit);
+`;
+
+/**
+ * One page of a chat's summaries, newest first. Pass `beforeCreatedAt` (the
+ * last item's `createdAt` from the previous page) to page further back.
+ * Fetches one extra row to report `hasMore` without a separate COUNT query.
+ * @param {string} chatId
+ * @param {{ limit?: number, beforeCreatedAt?: number }} [opts]
+ */
+function listSummaries(chatId, opts = {}) {
+  const limit = Math.min(50, Math.max(1, Number(opts.limit) || 20));
+  const beforeCreatedAt =
+    opts.beforeCreatedAt != null ? Number(opts.beforeCreatedAt) : null;
+
+  const rows = (
+    Number.isFinite(beforeCreatedAt)
+      ? getDb()
+          .prepare(
+            `${SUMMARY_SELECT} WHERE chat_id = ? AND created_at < ?
+             ORDER BY created_at DESC LIMIT ?`,
+          )
+          .all(chatId, beforeCreatedAt, limit + 1)
+      : getDb()
+          .prepare(
+            `${SUMMARY_SELECT} WHERE chat_id = ?
+             ORDER BY created_at DESC LIMIT ?`,
+          )
+          .all(chatId, limit + 1)
+  ).map((row) => ({ ...row, truncated: Boolean(row.truncated) }));
+
+  return { items: rows.slice(0, limit), hasMore: rows.length > limit };
 }
 
 /**
@@ -975,6 +1003,7 @@ function listSummaries(chatId, opts = {}) {
  *   fromTs: number | null,
  *   toTs: number | null,
  *   model: string | null,
+ *   truncated?: boolean,
  * }} summary
  */
 function insertSummary(summary) {
@@ -985,8 +1014,8 @@ function insertSummary(summary) {
     .prepare(
       `
       INSERT INTO summaries (
-        id, chat_id, body, mode, message_count, from_ts, to_ts, model, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, chat_id, body, mode, message_count, from_ts, to_ts, model, truncated, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     )
     .run(
@@ -998,6 +1027,7 @@ function insertSummary(summary) {
       summary.fromTs,
       summary.toTs,
       summary.model,
+      summary.truncated ? 1 : 0,
       createdAt,
     );
   database
@@ -1018,18 +1048,22 @@ function insertSummary(summary) {
     fromTs: summary.fromTs,
     toTs: summary.toTs,
     model: summary.model,
+    truncated: Boolean(summary.truncated),
     createdAt,
   };
 }
 
 /**
- * Messages after a watermark for summarization (oldest → newest).
+ * Messages after a watermark for summarization, returned oldest → newest.
+ * When the window holds more than `limit` messages, keeps the most RECENT
+ * `limit` (queries DESC, then reverses) rather than the oldest — a
+ * catch-up summary should never silently drop the newest activity.
  * @param {string} chatId
  * @param {number | null} afterTs
  * @param {number} [limit]
  */
 function getMessagesSince(chatId, afterTs, limit = 200) {
-  const capped = Math.min(400, Math.max(1, Number(limit) || 200));
+  const capped = Math.min(500, Math.max(1, Number(limit) || 200));
   const rows = getDb()
     .prepare(
       `
@@ -1045,11 +1079,12 @@ function getMessagesSince(chatId, afterTs, limit = 200) {
       INNER JOIN chats c ON c.id = m.chat_id
       WHERE m.chat_id = ?
         AND m.timestamp > ?
-      ORDER BY m.timestamp ASC
+      ORDER BY m.timestamp DESC
       LIMIT ?
     `,
     )
     .all(chatId, Number(afterTs) || 0, capped)
+    .reverse()
     .map(formatMessage);
   return rows;
 }
@@ -1124,16 +1159,33 @@ function countMessagesSince(chatId, afterTs) {
 }
 
 /**
+ * First page for a chat's Access panel: the latest summary plus the start
+ * of its "earlier summaries" history. Further pages come from
+ * `getEarlierSummaries`.
  * @param {string} chatId
  * @param {{ limit?: number }} [opts]
  */
 function getSummaryBoard(chatId, opts = {}) {
-  const summaries = listSummaries(chatId, opts);
+  const { items, hasMore } = listSummaries(chatId, opts);
   return {
     chatId,
-    latest: summaries[0] || null,
-    previous: summaries.slice(1),
+    latest: items[0] || null,
+    previous: items.slice(1),
+    hasMore,
   };
+}
+
+/**
+ * A page of summaries strictly older than `beforeCreatedAt`, for infinite
+ * scroll under "Earlier summary".
+ * @param {string} chatId
+ * @param {{ beforeCreatedAt: number, limit?: number }} opts
+ */
+function getEarlierSummaries(chatId, opts) {
+  return listSummaries(chatId, {
+    limit: opts?.limit,
+    beforeCreatedAt: opts?.beforeCreatedAt ?? Date.now(),
+  });
 }
 
 /**
@@ -1543,6 +1595,32 @@ function getMeta(key) {
   return row?.value ?? null;
 }
 
+const DEFAULT_DRAWER_WIDTH = 400;
+const DRAWER_WIDTH_MIN = 320;
+const DRAWER_WIDTH_MAX = 900;
+
+function clampDrawerWidth(width) {
+  const n = Number(width);
+  if (!Number.isFinite(n)) return DEFAULT_DRAWER_WIDTH;
+  return Math.min(DRAWER_WIDTH_MAX, Math.max(DRAWER_WIDTH_MIN, Math.round(n)));
+}
+
+/** Persisted width of the right-hand Access drawer (user-resizable). */
+function getDrawerWidth() {
+  const raw = getMeta("ui_drawer_width");
+  return raw == null ? DEFAULT_DRAWER_WIDTH : clampDrawerWidth(raw);
+}
+
+/**
+ * @param {number} width
+ * @returns {number} the clamped width actually stored
+ */
+function setDrawerWidth(width) {
+  const clamped = clampDrawerWidth(width);
+  setMeta("ui_drawer_width", String(clamped));
+  return clamped;
+}
+
 function closeDb() {
   if (db) {
     db.close();
@@ -1583,10 +1661,17 @@ module.exports = {
   getSummaryPrefs,
   listSummaries,
   getSummaryBoard,
+  getEarlierSummaries,
   insertSummary,
   getMessagesSince,
   countMessagesSince,
   listEnabledSummaryPrefs,
   setMeta,
+  getDrawerWidth,
+  setDrawerWidth,
+  clampDrawerWidth,
+  DEFAULT_DRAWER_WIDTH,
+  DRAWER_WIDTH_MIN,
+  DRAWER_WIDTH_MAX,
   closeDb,
 };

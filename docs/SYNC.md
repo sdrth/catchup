@@ -22,15 +22,19 @@ Follows the WhatsApp chat currently open:
 
 ## Summaries (Settings → Gateway)
 
+Any OpenAI Chat Completions-compatible endpoint works, not only Vercel — e.g. Gemini’s `https://generativelanguage.googleapis.com/v1beta/openai`. Vercel-specific request fields (Zero Data Retention) are only sent when the Base URL is actually `ai-gateway.vercel.sh`.
+
 | Field | Notes |
 | --- | --- |
-| API key | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) |
-| Base URL | `https://ai-gateway.vercel.sh/v1` |
-| Model | e.g. `anthropic/claude-sonnet-4.5` |
-| Zero Data Retention | On by default ([ZDR](https://vercel.com/docs/ai-gateway/security-and-compliance/zdr)) |
+| API key | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) key, or another provider’s API key |
+| Base URL | `https://ai-gateway.vercel.sh/v1` by default; swap for another OpenAI-compatible endpoint |
+| Model | e.g. `anthropic/claude-sonnet-4.5` (Vercel) or a bare model id like `gemini-3.8-flash` |
+| Zero Data Retention | On by default ([ZDR](https://vercel.com/docs/ai-gateway/security-and-compliance/zdr)); Vercel gateway only |
 | System prompt | Global; per-chat extras append |
 
 **Summarize now** forces a run; a background tick handles due jobs. Disabling summaries or Access deletes that chat’s stored cards.
+
+Every run (scheduled or manual) only looks back 12 hours or to the last summary, whichever is the shorter window, and trims the transcript to a ~12k-token input budget — always keeping the most recent messages. If either cap drops content, the summary is marked **Incomplete** in the Access panel.
 
 ## Settings — MCP
 
