@@ -155,6 +155,88 @@ function applyShellState(state) {
   });
 }
 
+function cssVarPx(name, fallback) {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Drag the Access drawer's left edge to resize it; persists on release. */
+function bindDrawerResize() {
+  const handle = document.getElementById("drawer-resize-handle");
+  if (!handle) return;
+
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 400;
+  let dragFrame = null;
+  let pendingWidth = null;
+
+  function clampWidth(width) {
+    // Leave room for the sidebar + a usable minimum of WhatsApp itself.
+    const maxByWindow = window.innerWidth - cssVarPx("--sidebar-width", 84) - 320;
+    const max = Math.min(900, Math.max(320, maxByWindow));
+    return Math.min(max, Math.max(320, Math.round(width)));
+  }
+
+  function applyWidth(width) {
+    document.documentElement.style.setProperty("--drawer-width", `${width}px`);
+  }
+
+  function flushDrag() {
+    dragFrame = null;
+    if (pendingWidth == null) return;
+    window.catchup.dragDrawerWidth?.(pendingWidth);
+    pendingWidth = null;
+  }
+
+  function onPointerMove(event) {
+    if (!dragging) return;
+    // Panel is right-anchored — moving the handle left grows the width.
+    const width = clampWidth(startWidth + (startX - event.clientX));
+    applyWidth(width);
+    pendingWidth = width;
+    if (dragFrame == null) dragFrame = requestAnimationFrame(flushDrag);
+  }
+
+  function onPointerUp(event) {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("is-dragging");
+    try {
+      handle.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // ignore
+    }
+    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointerup", onPointerUp);
+    if (dragFrame != null) {
+      cancelAnimationFrame(dragFrame);
+      dragFrame = null;
+    }
+    const final = clampWidth(cssVarPx("--drawer-width", startWidth));
+    void window.catchup.setDrawerWidth?.(final).then((clamped) => {
+      if (typeof clamped === "number") applyWidth(clamped);
+    });
+  }
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    dragging = true;
+    startX = event.clientX;
+    startWidth = cssVarPx("--drawer-width", 400);
+    handle.classList.add("is-dragging");
+    try {
+      handle.setPointerCapture?.(event.pointerId);
+    } catch {
+      // ignore
+    }
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
+    event.preventDefault();
+  });
+}
+
 function formatChatKind(chat) {
   return chat?.kind === "group" ? "Group" : "Contact";
 }
@@ -265,9 +347,24 @@ function renderPreview(messages) {
   }
 }
 
+function formatRelativeTime(diffMs) {
+  const sec = Math.max(0, Math.round(diffMs / 1000));
+  if (sec < 45) return "just now";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} min${min === 1 ? "" : "s"} ago`;
+  const hr = Math.round(min / 60);
+  return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+}
+
+/** Relative ("12 mins ago") under 24h old, absolute date/time beyond that. */
 function formatTime(ts) {
   const n = Number(ts);
   if (!n) return "";
+  const diffMs = Date.now() - n;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  if (diffMs >= 0 && diffMs < DAY_MS) {
+    return formatRelativeTime(diffMs);
+  }
   return new Date(n).toLocaleString(undefined, {
     month: "short",
     day: "numeric",
@@ -597,9 +694,258 @@ async function loadSummaryDetail(chatId) {
   renderSummaryCards(board);
 }
 
+const MD_INLINE_RE =
+  /(\*\*\*(.+?)\*\*\*)|(\*\*(.+?)\*\*)|(\*(.+?)\*)|(_(.+?)_)|(`([^`]+?)`)/g;
+
+/**
+ * Inline markdown (bold/italic/code) → DOM fragment. Never touches
+ * innerHTML — literal text always goes through createTextNode/textContent,
+ * so this can't inject markup even if a summary echoes hostile input.
+ * @param {string} text
+ */
+function renderInlineMarkdown(text) {
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  let match;
+  MD_INLINE_RE.lastIndex = 0;
+  while ((match = MD_INLINE_RE.exec(text))) {
+    if (match.index > last) {
+      frag.appendChild(document.createTextNode(text.slice(last, match.index)));
+    }
+    if (match[2] !== undefined) {
+      const strong = document.createElement("strong");
+      const em = document.createElement("em");
+      em.textContent = match[2];
+      strong.appendChild(em);
+      frag.appendChild(strong);
+    } else if (match[4] !== undefined) {
+      const el = document.createElement("strong");
+      el.textContent = match[4];
+      frag.appendChild(el);
+    } else if (match[6] !== undefined || match[8] !== undefined) {
+      const el = document.createElement("em");
+      el.textContent = match[6] !== undefined ? match[6] : match[8];
+      frag.appendChild(el);
+    } else if (match[10] !== undefined) {
+      const el = document.createElement("code");
+      el.textContent = match[10];
+      frag.appendChild(el);
+    }
+    last = MD_INLINE_RE.lastIndex;
+  }
+  if (last < text.length) {
+    frag.appendChild(document.createTextNode(text.slice(last)));
+  }
+  return frag;
+}
+
+/**
+ * Minimal, dependency-free markdown renderer for AI summary text: ATX
+ * headings, a "**Bold line**" used as a de-facto section header, nested
+ * bullet/numbered lists, and inline bold/italic/code. Good enough for the
+ * fairly regular markdown these summarizer models produce.
+ * @param {HTMLElement} container
+ * @param {string} markdown
+ */
+function renderMarkdownBody(container, markdown) {
+  container.replaceChildren();
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+
+  /** @type {Array<{ el: HTMLElement, indent: number, lastLi: HTMLElement | null }>} */
+  const listStack = [];
+  /** @type {string[]} */
+  let paragraphLines = [];
+
+  function flushParagraph() {
+    if (paragraphLines.length === 0) return;
+    const p = document.createElement("p");
+    p.appendChild(renderInlineMarkdown(paragraphLines.join(" ")));
+    container.appendChild(p);
+    paragraphLines = [];
+  }
+
+  function closeListsTo(indent) {
+    while (listStack.length && listStack[listStack.length - 1].indent > indent) {
+      listStack.pop();
+    }
+  }
+
+  function listFor(indent, ordered) {
+    closeListsTo(indent);
+    const top = listStack[listStack.length - 1];
+    if (top && top.indent === indent) return top;
+    const el = document.createElement(ordered ? "ol" : "ul");
+    el.className = "summary-list";
+    if (top) {
+      (top.lastLi || top.el).appendChild(el);
+    } else {
+      container.appendChild(el);
+    }
+    const entry = { el, indent, lastLi: null };
+    listStack.push(entry);
+    return entry;
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+$/, "");
+    if (!line.trim()) {
+      flushParagraph();
+      listStack.length = 0;
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      listStack.length = 0;
+      const h = document.createElement("div");
+      h.className = `summary-heading summary-heading-${heading[1].length}`;
+      h.appendChild(renderInlineMarkdown(heading[2]));
+      container.appendChild(h);
+      continue;
+    }
+
+    const boldHeading = line.match(/^\*\*(.+)\*\*:?$/);
+    if (boldHeading) {
+      flushParagraph();
+      listStack.length = 0;
+      const h = document.createElement("div");
+      h.className = "summary-heading summary-heading-2";
+      h.appendChild(renderInlineMarkdown(boldHeading[1]));
+      container.appendChild(h);
+      continue;
+    }
+
+    const bullet = line.match(/^(\s*)([*-]|\d+\.)\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      const indent = Math.floor(bullet[1].length / 2);
+      const ordered = bullet[2] !== "*" && bullet[2] !== "-";
+      const entry = listFor(indent, ordered);
+      const li = document.createElement("li");
+      li.appendChild(renderInlineMarkdown(bullet[3]));
+      entry.el.appendChild(li);
+      entry.lastLi = li;
+      continue;
+    }
+
+    listStack.length = 0;
+    paragraphLines.push(line.trim());
+  }
+  flushParagraph();
+
+  if (!container.childNodes.length) {
+    container.textContent = String(markdown || "");
+  }
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {any} summary
+ * @param {{ collapsed?: boolean, before?: Node | null }} [opts]
+ */
+function appendSummaryCard(root, summary, opts = {}) {
+  const collapsed = opts.collapsed !== false;
+  const article = document.createElement("article");
+  article.className = `summary-card${collapsed ? " is-collapsed" : " is-latest"}`;
+
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "summary-card-head";
+  const title = document.createElement("span");
+  title.className = "summary-card-title";
+  title.textContent = collapsed ? "Earlier summary" : "Latest summary";
+  const metaGroup = document.createElement("span");
+  metaGroup.className = "summary-card-meta-group";
+  const meta = document.createElement("span");
+  meta.className = "summary-card-meta";
+  meta.textContent = `${formatTime(summary.createdAt)} · ${
+    summary.messageCount || 0
+  } msgs`;
+  metaGroup.append(meta);
+  if (summary.truncated) {
+    const flag = document.createElement("span");
+    flag.className = "status-pill is-warning";
+    flag.title =
+      "Some older messages in this time slice were left out to fit the input budget.";
+    flag.textContent = "Incomplete";
+    metaGroup.append(flag);
+  }
+  head.append(title, metaGroup);
+  head.addEventListener("click", () => {
+    article.classList.toggle("is-collapsed");
+  });
+
+  const body = document.createElement("div");
+  body.className = "summary-card-body";
+  renderMarkdownBody(body, summary.body);
+
+  article.append(head, body);
+  if (opts.before) {
+    root.insertBefore(article, opts.before);
+  } else {
+    root.appendChild(article);
+  }
+}
+
+/** @type {{ chatId: string | null, cursor: number | null, hasMore: boolean, loading: boolean, observer: IntersectionObserver | null }} */
+const summaryPaging = {
+  chatId: null,
+  cursor: null,
+  hasMore: false,
+  loading: false,
+  observer: null,
+};
+
+function createSummarySentinel() {
+  const sentinel = document.createElement("div");
+  sentinel.id = "summary-load-sentinel";
+  sentinel.className = "summary-load-sentinel";
+  return sentinel;
+}
+
+/** Fetches and appends the next page of "Earlier summary" cards. */
+async function loadMoreSummaries() {
+  if (summaryPaging.loading || !summaryPaging.hasMore || !summaryPaging.chatId) {
+    return;
+  }
+  const root = document.getElementById("summary-cards");
+  const sentinel = document.getElementById("summary-load-sentinel");
+  if (!root || !sentinel) return;
+
+  summaryPaging.loading = true;
+  sentinel.classList.add("is-loading");
+  try {
+    const page = await window.catchup.getEarlierSummaries(summaryPaging.chatId, {
+      beforeCreatedAt: summaryPaging.cursor,
+      limit: 20,
+    });
+    const items = page?.items || [];
+    for (const summary of items) {
+      appendSummaryCard(root, summary, { collapsed: true, before: sentinel });
+    }
+    if (items.length) {
+      summaryPaging.cursor = items[items.length - 1].createdAt;
+    }
+    summaryPaging.hasMore = Boolean(page?.hasMore);
+    if (!summaryPaging.hasMore) {
+      sentinel.remove();
+      summaryPaging.observer?.disconnect();
+      summaryPaging.observer = null;
+    }
+  } catch {
+    // Leave hasMore as-is — scrolling near the sentinel again retries.
+  } finally {
+    summaryPaging.loading = false;
+    sentinel.classList.remove("is-loading");
+  }
+}
+
 function renderSummaryCards(board) {
   const root = document.getElementById("summary-cards");
   if (!root) return;
+  summaryPaging.observer?.disconnect();
+  summaryPaging.observer = null;
   root.replaceChildren();
 
   if (!board?.latest) {
@@ -607,37 +953,37 @@ function renderSummaryCards(board) {
       root,
       "No notes yet. Turn on catch-up summaries, save the schedule, then Summarize now.",
     );
+    summaryPaging.chatId = null;
+    summaryPaging.cursor = null;
+    summaryPaging.hasMore = false;
     return;
   }
 
-  const cards = [board.latest, ...(board.previous || [])];
-  cards.forEach((summary, index) => {
-    const article = document.createElement("article");
-    article.className = `summary-card${index === 0 ? " is-latest" : " is-collapsed"}`;
+  appendSummaryCard(root, board.latest, { collapsed: false });
+  const previous = board.previous || [];
+  for (const summary of previous) {
+    appendSummaryCard(root, summary, { collapsed: true });
+  }
 
-    const head = document.createElement("button");
-    head.type = "button";
-    head.className = "summary-card-head";
-    const title = document.createElement("span");
-    title.className = "summary-card-title";
-    title.textContent = index === 0 ? "Latest summary" : "Earlier summary";
-    const meta = document.createElement("span");
-    meta.className = "summary-card-meta";
-    meta.textContent = `${formatTime(summary.createdAt)} · ${
-      summary.messageCount || 0
-    } msgs`;
-    head.append(title, meta);
-    head.addEventListener("click", () => {
-      article.classList.toggle("is-collapsed");
-    });
+  summaryPaging.chatId = board.chatId || selectedSummaryChatId;
+  summaryPaging.hasMore = Boolean(board.hasMore);
+  summaryPaging.cursor =
+    (previous[previous.length - 1] || board.latest)?.createdAt ?? null;
 
-    const body = document.createElement("div");
-    body.className = "summary-card-body";
-    body.textContent = summary.body;
-
-    article.append(head, body);
-    root.appendChild(article);
-  });
+  if (summaryPaging.hasMore) {
+    const sentinel = createSummarySentinel();
+    root.appendChild(sentinel);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadMoreSummaries();
+        }
+      },
+      { root: document.getElementById("summary-detail"), rootMargin: "200px" },
+    );
+    observer.observe(sentinel);
+    summaryPaging.observer = observer;
+  }
 }
 
 async function refreshSummaries() {
@@ -838,6 +1184,7 @@ async function init() {
   document.getElementById("close-summaries")?.addEventListener("click", () => {
     window.catchup.switchApp("summaries");
   });
+  bindDrawerResize();
   document
     .querySelectorAll('input[name="summary-mode"]')
     .forEach((el) => el.addEventListener("change", syncModeFields));

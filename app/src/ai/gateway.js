@@ -1,10 +1,14 @@
 /**
- * Vercel AI Gateway client (OpenAI Chat Completions compatible).
+ * OpenAI Chat Completions-compatible client. Defaults to Vercel AI Gateway,
+ * but Settings → Base URL accepts any compatible endpoint (e.g. Gemini's
+ * https://generativelanguage.googleapis.com/v1beta/openai).
  * @see https://vercel.com/docs/ai-gateway
  * @see https://vercel.com/docs/ai-gateway/security-and-compliance/zdr
+ * @see https://ai.google.dev/gemini-api/docs/openai
  */
 
 const DEFAULT_BASE_URL = "https://ai-gateway.vercel.sh/v1";
+const VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh";
 
 /**
  * @param {{
@@ -21,7 +25,7 @@ const DEFAULT_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 async function generateViaGateway(opts) {
   const apiKey = String(opts.apiKey || "").trim();
   if (!apiKey) {
-    throw new Error("Add your Vercel AI Gateway API key in Settings.");
+    throw new Error("Add your AI Gateway API key in Settings.");
   }
 
   const baseUrl = String(opts.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "");
@@ -42,12 +46,12 @@ async function generateViaGateway(opts) {
       { role: "system", content: String(opts.system || "") },
       { role: "user", content: String(opts.user || "") },
     ],
-    providerOptions: {
-      gateway: {
-        zeroDataRetention,
-      },
-    },
   };
+  // Vercel-specific request shape — other OpenAI-compatible providers (e.g.
+  // Gemini) don't know this field, so only send it to the actual gateway.
+  if (baseUrl.includes(VERCEL_GATEWAY_HOST)) {
+    body.providerOptions = { gateway: { zeroDataRetention } };
+  }
 
   const response = await fetch(url, {
     method: "POST",
