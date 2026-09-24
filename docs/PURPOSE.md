@@ -14,7 +14,7 @@ Catchup lets AI tools read WhatsApp chats you explicitly allow — nothing else.
 
 1. Log into WhatsApp in Catchup.
 2. Open a chat → **Access** → **Allow agents to read this chat** (applies immediately).
-3. Optionally enable catch-up summaries and **Save schedule**.
+3. Optionally enable catch-up summaries (schedule fields save automatically).
 4. **Settings** → copy MCP command / JSON. Add a Gateway key only if you use summaries.
 
 ## Privacy

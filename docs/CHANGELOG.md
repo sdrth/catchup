@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **UX: confirm before deleting.** Turning off Access or catch-up summaries for a chat that has stored messages/notes now shows an inline confirm stating exactly what will be deleted (Cancel / Esc keeps it on).
+- **UX: schedule autosaves.** Access schedule fields (mode, count, minutes, max tokens, extra instructions) save as you edit and are clamped to their valid ranges; the **Save schedule** button is gone. Pending edits are flushed when you switch chats.
+- **UX: clearer feedback.** Status lines fade after a few seconds; errors stay, render in red, drop the `Error invoking remote method …` prefix, and offer **Open Settings** when the fix lives there. Busy labels on **Summarize now** / **Save settings** / **Refresh**; copy buttons flash **Copied ✓**.
+- **UX: keyboard.** Esc closes the Access drawer or Settings; ⌘S (Ctrl+S) and Enter in Gateway fields save settings. Settings shows an "Unsaved changes" hint and keeps unsaved edits when you navigate away and back.
+- **UX: small polish.** Relative timestamps refresh every 30s (absolute time on hover), summary cards have a chevron + `aria-expanded`, the API key field says whether a key is already saved, and visible focus rings on buttons/links.
 - **pnpm 12 install:** move build policy to `app/pnpm-workspace.yaml` (`allowBuilds`: Electron on, `better-sqlite3` off — uses shipped prebuilds). Stops `ERR_PNPM_IGNORED_BUILDS` / `node-gyp: command not found` on install.
 - Add MIT [LICENSE](../LICENSE) (as-is, no warranty / no liability).
 - Add [SECURITY.md](../SECURITY.md) (local store, zero telemetry / no Catchup backend, MCP trust model, reporting).
