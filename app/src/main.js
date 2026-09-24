@@ -749,7 +749,10 @@ ipcMain.handle("mcp:configSnippet", () => {
   }
 
   const skillMarkdown = readText(path.join(skillDir, "SKILL.md"));
-  const agentPrompt = readText(path.join(skillDir, "PROMPT.md")).trim();
+  const agentPromptTemplate = readText(path.join(skillDir, "PROMPT.md")).trim();
+  const agentPrompt = agentPromptTemplate
+    .replaceAll("{{CATCHUP_MCP_COMMAND}}", command)
+    .replaceAll("{{CATCHUP_MCP_SERVER_PATH}}", serverPath);
 
   // Absolute paths are required for a working MCP launch; UI shows redacted copies.
   return {

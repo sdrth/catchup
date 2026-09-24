@@ -1558,7 +1558,7 @@ async function init() {
     { ok: "MCP JSON copied." },
   );
   bindCopy("copy-agent-prompt", () => mcpCache?.agentPrompt || "", {
-    ok: "Agent prompt copied — paste into Claude, Codex, or Cursor.",
+    ok: "Prompt copied — includes the MCP command for this Mac.",
     empty: "Agent prompt not found.",
   });
   bindCopy("copy-agent-skill", () => mcpCache?.skillMarkdown || "", {

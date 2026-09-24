@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Agent prompt: include a runnable MCP connect block.** Copied prompt now embeds the absolute `node …/server.mjs` command and Cursor/Claude Desktop JSON (placeholders filled in `main.js`), so local agents can discover and start Catchup MCP instead of only being told to re-open Settings.
 - **UI: WhatsApp look, restrained glass.** Restyled on WhatsApp Web's dark palette (`#111b21` / `#202c33` surfaces, `#00a884` green, `#e9edef` / `#8696a0` text): flat panels, WhatsApp-style switches, pill buttons, inputs and chat-list preview rows; summaries render as message bubbles. Removed the decorative glass gradients, sheens, glows, drop shadows and pulsing dot. Glass (translucent + blur) remains only on the Access and Settings headers, where content scrolls underneath. Sidebar uses monochrome rail icons with a filled active pill; Access gets a shield icon.
 - **UX: confirm before deleting.** Turning off Access or catch-up summaries for a chat that has stored messages/notes now shows an inline confirm stating exactly what will be deleted (Cancel / Esc keeps it on).
 - **UX: schedule autosaves.** Access schedule fields (mode, count, minutes, max tokens, extra instructions) save as you edit and are clamped to their valid ranges; the **Save schedule** button is gone. Pending edits are flushed when you switch chats.
