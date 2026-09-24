@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("catchup", {
   },
   listChats: () => ipcRenderer.invoke("db:listChats"),
   getActiveWaChat: () => ipcRenderer.invoke("whatsapp:getActiveChat"),
+  forceWhatsAppSync: () => ipcRenderer.invoke("whatsapp:forceSync"),
   onActiveWaChat: (callback) => {
     const handler = (_event, chat) => callback(chat);
     ipcRenderer.on("whatsapp:activeChat", handler);
@@ -26,12 +27,14 @@ contextBridge.exposeInMainWorld("catchup", {
   getMcpConfig: () => ipcRenderer.invoke("mcp:configSnippet"),
   getAiSettings: () => ipcRenderer.invoke("ai:getSettings"),
   setAiSettings: (patch) => ipcRenderer.invoke("ai:setSettings", patch),
+  testAiConnection: (draft) => ipcRenderer.invoke("ai:testConnection", draft),
   setSummaryPrefs: (chatId, patch) =>
     ipcRenderer.invoke("summary:setPrefs", chatId, patch),
   getSummaryBoard: (chatId) => ipcRenderer.invoke("summary:board", chatId),
   getEarlierSummaries: (chatId, opts) =>
     ipcRenderer.invoke("summary:earlier", chatId, opts),
-  runSummaryNow: (chatId) => ipcRenderer.invoke("summary:runNow", chatId),
+  runSummaryNow: (chatId, opts) =>
+    ipcRenderer.invoke("summary:runNow", chatId, opts || {}),
   /** Clipboard must go through main — sandboxed preload clipboard is unreliable on macOS. */
   copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),

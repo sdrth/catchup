@@ -10,6 +10,39 @@
 const DEFAULT_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 const VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh";
 
+/** @param {string} baseUrl */
+function isLoopbackBaseUrl(baseUrl) {
+  try {
+    const host = new URL(baseUrl).hostname;
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "::1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reject cleartext http except loopback so API keys never leave over plain HTTP.
+ * @param {string} baseUrl
+ */
+function assertSafeBaseUrl(baseUrl) {
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("Base URL must be a valid http(s) URL.");
+  }
+  if (parsed.protocol === "https:") return;
+  if (parsed.protocol === "http:" && isLoopbackBaseUrl(baseUrl)) return;
+  throw new Error(
+    "Base URL must use https (http is only allowed for localhost).",
+  );
+}
+
 /**
  * @param {{
  *   apiKey: string,
@@ -23,19 +56,21 @@ const VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh";
  * @returns {Promise<{ text: string, model: string }>}
  */
 async function generateViaGateway(opts) {
+  const baseUrl = String(opts.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "");
+  assertSafeBaseUrl(baseUrl);
   const apiKey = String(opts.apiKey || "").trim();
-  if (!apiKey) {
-    throw new Error("Add your AI Gateway API key in Settings.");
+  const loopback = isLoopbackBaseUrl(baseUrl);
+  if (!apiKey && !loopback) {
+    throw new Error("Add your gateway API key in Settings.");
   }
 
-  const baseUrl = String(opts.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "");
   const model = String(opts.model || "").trim();
   if (!model) throw new Error("Choose a model in Settings.");
 
   const zeroDataRetention = opts.zeroDataRetention !== false;
   const maxTokens = Math.min(
     4096,
-    Math.max(64, Number(opts.maxTokens) || 512),
+    Math.max(16, Number(opts.maxTokens) || 512),
   );
   const url = `${baseUrl}/chat/completions`;
 
@@ -49,16 +84,23 @@ async function generateViaGateway(opts) {
   };
   // Vercel-specific request shape — other OpenAI-compatible providers (e.g.
   // Gemini) don't know this field, so only send it to the actual gateway.
-  if (baseUrl.includes(VERCEL_GATEWAY_HOST)) {
+  let isVercel = false;
+  try {
+    isVercel = new URL(baseUrl).hostname === VERCEL_GATEWAY_HOST;
+  } catch {
+    isVercel = false;
+  }
+  if (isVercel) {
     body.providerOptions = { gateway: { zeroDataRetention } };
   }
 
+  /** @type {Record<string, string>} */
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify(body),
   });
 
@@ -70,10 +112,10 @@ async function generateViaGateway(opts) {
   } catch {
     if (!response.ok) {
       throw new Error(
-        `AI Gateway error ${response.status}: ${raw.slice(0, 240)}`,
+        `Summary API error ${response.status}: ${raw.slice(0, 240)}`,
       );
     }
-    throw new Error("AI Gateway returned invalid JSON.");
+    throw new Error("Summary API returned invalid JSON.");
   }
 
   if (!response.ok) {
@@ -81,13 +123,13 @@ async function generateViaGateway(opts) {
       (typeof data?.error === "object" ? data.error?.message : data?.error) ||
       data?.message ||
       raw ||
-      `AI Gateway error ${response.status}`;
+      `Summary API error ${response.status}`;
     throw new Error(String(message));
   }
 
   const text = data?.choices?.[0]?.message?.content;
   if (!text || !String(text).trim()) {
-    throw new Error("AI Gateway returned an empty summary.");
+    throw new Error("Summary API returned an empty summary.");
   }
 
   return {
@@ -96,4 +138,39 @@ async function generateViaGateway(opts) {
   };
 }
 
-module.exports = { generateViaGateway, DEFAULT_BASE_URL };
+/**
+ * Tiny live call so Settings can verify key + base URL + model.
+ * @param {{
+ *   apiKey?: string,
+ *   baseUrl?: string,
+ *   model: string,
+ *   zeroDataRetention?: boolean,
+ * }} opts
+ * @returns {Promise<{ ok: true, model: string, latencyMs: number, sample: string }>}
+ */
+async function testGatewayConnection(opts) {
+  const started = Date.now();
+  const result = await generateViaGateway({
+    apiKey: opts.apiKey || "",
+    baseUrl: opts.baseUrl,
+    model: opts.model,
+    zeroDataRetention: opts.zeroDataRetention,
+    system: "You are a connection test. Reply with exactly the single word: ok",
+    user: "ping",
+    maxTokens: 16,
+  });
+  return {
+    ok: true,
+    model: result.model,
+    latencyMs: Date.now() - started,
+    sample: result.text.slice(0, 80),
+  };
+}
+
+module.exports = {
+  generateViaGateway,
+  testGatewayConnection,
+  DEFAULT_BASE_URL,
+  isLoopbackBaseUrl,
+  assertSafeBaseUrl,
+};

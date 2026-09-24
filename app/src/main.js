@@ -41,9 +41,11 @@ const {
   setDrawerWidth,
   clampDrawerWidth,
   closeDb,
+  getAiGatewayApiKey,
 } = require("./db/store");
 const { attachWhatsAppCapture } = require("./whatsapp/capture");
-const { runSummaryForChat, tickSummaries } = require("./ai/summarize");
+const { runSummaryForChat, tickSummaries, getLookbackState } = require("./ai/summarize");
+const { testGatewayConnection } = require("./ai/gateway");
 
 const SIDEBAR_WIDTH = 84;
 const APP_NAME = "Catchup";
@@ -174,16 +176,18 @@ function pushCapturePolicy() {
   whatsappCapture?.setPolicy?.(policy);
 }
 
+/**
+ * Reading what WhatsApp Web already has loaded is local and never throttled.
+ * Only the deep path (loadEarlierMsgs asks WhatsApp for older history) is
+ * rate-limited, and hitting that limit just downgrades to a shallow read.
+ * @returns {{
+ *   ok: boolean,
+ *   reason?: 'no_view',
+ *   deep?: boolean,
+ *   deepRetryAfterMs?: number,
+ * }}
+ */
 function requestWhatsAppSnapshot() {
-  const snapGate = consumeRateLimit("force_snapshot", {
-    max: 10,
-    windowMs: 60 * 60 * 1000,
-  });
-  if (!snapGate.allowed) {
-    console.warn("[catchup] sync cooldown — try again later (rate limit)");
-    return;
-  }
-
   const deepGate = checkRateLimit("deep_load", {
     max: 6,
     windowMs: 60 * 60 * 1000,
@@ -192,20 +196,24 @@ function requestWhatsAppSnapshot() {
   if (allowDeep) {
     consumeRateLimit("deep_load", { max: 6, windowMs: 60 * 60 * 1000 });
   }
+  const deepRetryAfterMs = allowDeep ? 0 : deepGate.retryAfterMs || 0;
 
   pushCapturePolicy();
   if (whatsappCapture?.forceSnapshot) {
     whatsappCapture.forceSnapshot({ deep: allowDeep });
-    return;
+    return { ok: true, deep: allowDeep, deepRetryAfterMs };
   }
   const view = getWhatsAppView();
-  if (!view || view.webContents.isDestroyed()) return;
+  if (!view || view.webContents.isDestroyed()) {
+    return { ok: false, reason: "no_view" };
+  }
   view.webContents
     .executeJavaScript(
       `typeof window.__catchupForceSnapshot === "function" && window.__catchupForceSnapshot(${allowDeep ? "true" : "false"}); true;`,
       true,
     )
     .catch(() => {});
+  return { ok: true, deep: allowDeep, deepRetryAfterMs };
 }
 
 /**
@@ -395,7 +403,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     show: false,
-    backgroundColor: "#0c0f14",
+    backgroundColor: "#0c1317",
     title: APP_NAME,
     icon: fs.existsSync(APP_ICON_PNG) ? APP_ICON_PNG : undefined,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
@@ -635,6 +643,29 @@ function afterAllowlistChange({ pullSnapshot = false } = {}) {
 
 ipcMain.handle("db:listChats", () => listChats());
 ipcMain.handle("whatsapp:getActiveChat", () => activeWaChat);
+ipcMain.handle("whatsapp:forceSync", () => {
+  const result = requestWhatsAppSnapshot();
+  if (!result.ok && result.reason === "no_view") {
+    return {
+      ...result,
+      message: "WhatsApp isn’t open in Catchup yet.",
+    };
+  }
+  if (result.deep) {
+    return {
+      ...result,
+      message: "Syncing this chat (including earlier history)…",
+    };
+  }
+  const mins = Math.ceil((result.deepRetryAfterMs || 0) / 60000);
+  return {
+    ...result,
+    message:
+      mins > 0
+        ? `Syncing loaded messages from the open chat… (earlier-history fetch resumes in about ${mins} min)`
+        : "Syncing visible messages from the open chat…",
+  };
+});
 ipcMain.handle("chat:save", (_event, chatId, opts) => {
   if (typeof chatId !== "string" || !opts || typeof opts !== "object") {
     return null;
@@ -654,6 +685,25 @@ ipcMain.handle("ai:setSettings", (_event, patch) => {
   if (!patch || typeof patch !== "object") return getAiSettings();
   return setAiSettings(patch);
 });
+ipcMain.handle("ai:testConnection", async (_event, draft) => {
+  const settings = getAiSettings();
+  const patch = draft && typeof draft === "object" ? draft : {};
+  const apiKey =
+    String(patch.apiKey || "").trim() || getAiGatewayApiKey() || "";
+  const baseUrl =
+    String(patch.baseUrl || "").trim() || settings.baseUrl || "";
+  const model = String(patch.model || "").trim() || settings.model || "";
+  const zeroDataRetention =
+    patch.zeroDataRetention != null
+      ? Boolean(patch.zeroDataRetention)
+      : settings.zeroDataRetention;
+  return testGatewayConnection({
+    apiKey,
+    baseUrl,
+    model,
+    zeroDataRetention,
+  });
+});
 ipcMain.handle("summary:setPrefs", (_event, chatId, patch) => {
   if (typeof chatId !== "string" || !patch || typeof patch !== "object") {
     return null;
@@ -664,18 +714,28 @@ ipcMain.handle("summary:setPrefs", (_event, chatId, patch) => {
 });
 ipcMain.handle("summary:board", (_event, chatId) => {
   if (typeof chatId !== "string") {
-    return { chatId: "", latest: null, previous: [], hasMore: false };
+    return {
+      chatId: "",
+      latest: null,
+      previous: [],
+      hasMore: false,
+      lookback: null,
+    };
   }
-  return getSummaryBoard(chatId);
+  return {
+    ...getSummaryBoard(chatId),
+    lookback: getLookbackState(chatId),
+  };
 });
 ipcMain.handle("summary:earlier", (_event, chatId, opts) => {
   if (typeof chatId !== "string") return { items: [], hasMore: false };
   return getEarlierSummaries(chatId, opts || {});
 });
-ipcMain.handle("summary:runNow", async (_event, chatId) => {
+ipcMain.handle("summary:runNow", async (_event, chatId, opts) => {
   if (typeof chatId !== "string") throw new Error("chatId required");
+  const forceLookback = Boolean(opts && opts.forceLookback);
   // Caller refreshes UI from the invoke result — do not also emit.
-  return runSummaryForChat(chatId, { force: true });
+  return runSummaryForChat(chatId, { force: true, forceLookback });
 });
 async function collectMemoryStats() {
   /** @type {Record<string, number>} */
@@ -749,7 +809,10 @@ ipcMain.handle("mcp:configSnippet", () => {
   }
 
   const skillMarkdown = readText(path.join(skillDir, "SKILL.md"));
-  const agentPrompt = readText(path.join(skillDir, "PROMPT.md")).trim();
+  const agentPromptTemplate = readText(path.join(skillDir, "PROMPT.md")).trim();
+  const agentPrompt = agentPromptTemplate
+    .replaceAll("{{CATCHUP_MCP_COMMAND}}", command)
+    .replaceAll("{{CATCHUP_MCP_SERVER_PATH}}", serverPath);
 
   // Absolute paths are required for a working MCP launch; UI shows redacted copies.
   return {

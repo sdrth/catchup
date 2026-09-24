@@ -171,15 +171,54 @@
                   ></textarea>
 
                   <div class="action-bar" id="summary-actions">
-                    <button type="button" id="summary-save" class="btn btn-quiet">
-                      Save schedule
-                    </button>
                     <button type="button" id="summary-run" class="btn btn-accent">
                       Summarize now
                     </button>
+                    <button
+                      type="button"
+                      id="summary-run-older"
+                      class="btn btn-quiet"
+                      hidden
+                    >
+                      Summarize older messages
+                    </button>
+                    <button
+                      type="button"
+                      id="summary-sync"
+                      class="btn btn-quiet"
+                      hidden
+                    >
+                      Sync messages
+                    </button>
+                    <span class="action-hint">Changes save automatically</span>
                   </div>
+                  <p
+                    id="summary-lookback-hint"
+                    class="panel-subtitle field-hint"
+                    hidden
+                  ></p>
                 </div>
               </section>
+
+              <div
+                id="consent-confirm"
+                class="consent-confirm"
+                role="alertdialog"
+                aria-labelledby="consent-confirm-title"
+                aria-describedby="consent-confirm-text"
+                hidden
+              >
+                <p id="consent-confirm-title" class="consent-confirm-title"></p>
+                <p id="consent-confirm-text" class="consent-confirm-text"></p>
+                <div class="action-bar">
+                  <button type="button" id="consent-confirm-cancel" class="btn btn-quiet btn-mini">
+                    Cancel
+                  </button>
+                  <button type="button" id="consent-confirm-ok" class="btn btn-danger btn-mini">
+                    Turn off and delete
+                  </button>
+                </div>
+              </div>
 
               <p id="summary-status" class="toast-line" role="status" aria-live="polite"></p>
 
@@ -264,14 +303,15 @@
           <section class="panel" aria-labelledby="ai-heading">
             <div class="panel-header">
               <div>
-                <h2 id="ai-heading" class="panel-title">Vercel AI Gateway</h2>
+                <h2 id="ai-heading" class="panel-title">AI Gateway</h2>
                 <p class="panel-subtitle">
-                  Needed when catch-up summaries are on.
+                  Needed when catch-up summaries are on. Choose a provider
+                  preset or a custom OpenAI-compatible base URL.
                   <a
                     class="inline-link"
                     href="https://vercel.com/docs/ai-gateway"
                     id="ai-gateway-docs"
-                    >Docs</a
+                    >Vercel docs</a
                   >
                 </p>
               </div>
@@ -285,15 +325,33 @@
               autocomplete="off"
               placeholder="Leave blank to keep existing key"
             />
-            <p class="panel-subtitle" id="ai-key-hint">No key saved yet.</p>
+            <p class="panel-subtitle field-hint" id="ai-key-hint">No key saved yet.</p>
 
-            <label class="field-label" for="ai-base-url">Base URL</label>
-            <input
-              id="ai-base-url"
-              class="field-input mono"
-              type="url"
-              value="https://ai-gateway.vercel.sh/v1"
-            />
+            <label class="field-label" for="ai-provider">Provider</label>
+            <select id="ai-provider" class="field-input field-select" aria-describedby="ai-provider-hint">
+              <option value="vercel">Vercel AI Gateway</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="groq">Groq</option>
+              <option value="ollama">Ollama (local)</option>
+              <option value="custom">Custom…</option>
+            </select>
+            <p class="panel-subtitle field-hint" id="ai-provider-hint">
+              OpenAI Chat Completions–compatible endpoints. Pick Custom to paste any other base URL.
+            </p>
+
+            <div id="ai-base-url-field" hidden>
+              <label class="field-label" for="ai-base-url">Custom base URL</label>
+              <input
+                id="ai-base-url"
+                class="field-input mono"
+                type="url"
+                placeholder="https://&lt;your-endpoint&gt;/v1"
+                autocomplete="off"
+              />
+            </div>
 
             <label class="field-label" for="ai-model">Model</label>
             <input
@@ -303,9 +361,16 @@
               placeholder="anthropic/claude-sonnet-4.5"
             />
 
-            <label class="toggle-row ai-zdr-row">
+            <div class="control-row ai-test-row">
+              <button type="button" id="test-ai-settings" class="btn btn-quiet">
+                Test connection
+              </button>
+              <p id="ai-test-status" class="toast-line" role="status" aria-live="polite"></p>
+            </div>
+
+            <label class="toggle-row ai-zdr-row" id="ai-zdr-row">
               <input type="checkbox" id="ai-zdr" checked />
-              <span>Zero Data Retention (ZDR)</span>
+              <span>Zero Data Retention (ZDR) — Vercel gateway only</span>
             </label>
 
             <label class="field-label" for="ai-system-prompt">System prompt</label>
@@ -316,10 +381,11 @@
               spellcheck="true"
             ></textarea>
 
-            <div class="control-row">
+            <div class="control-row control-row-center">
               <button type="button" id="save-ai-settings" class="btn btn-accent">
                 Save settings
               </button>
+              <span id="ai-dirty-hint" class="action-hint" hidden>Unsaved changes · ⌘S</span>
             </div>
             <p id="ai-save-status" class="toast-line" role="status" aria-live="polite"></p>
           </section>
