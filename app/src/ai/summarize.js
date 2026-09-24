@@ -3,6 +3,7 @@ const {
   getAiGatewayApiKey,
   getMessagesSince,
   countMessagesSince,
+  getLatestMessageTimestamp,
   insertSummary,
   listEnabledSummaryPrefs,
   getSummaryPrefs,
@@ -12,7 +13,7 @@ const { generateViaGateway } = require("./gateway");
 /** @type {Set<string>} */
 const inFlight = new Set();
 
-/** Never look back further than this, even if the chat hasn't been summarized in days. */
+/** Never look back further than this on scheduled / default Summarize now. */
 const LOOKBACK_WINDOW_MS = 12 * 60 * 60 * 1000;
 /** Rough input budget for the transcript sent to the model (chars/4 heuristic). */
 const MAX_INPUT_TOKENS = 12_000;
@@ -80,8 +81,42 @@ function isDue(prefs, force) {
 }
 
 /**
+ * Whether the default 12h window is empty but older stored messages exist
+ * (after the last summary watermark). Used by Access UI + Summarize now.
  * @param {string} chatId
- * @param {{ force?: boolean, prefs?: NonNullable<ReturnType<typeof getSummaryPrefs>>, settings?: ReturnType<typeof getAiSettings> }} [opts]
+ * @param {{ lastMessageTs?: number } | null} [prefs]
+ */
+function getLookbackState(chatId, prefs = null) {
+  const resolved = prefs || getSummaryPrefs(chatId);
+  const watermark = Number(resolved?.lastMessageTs) || 0;
+  const lookbackStart = Date.now() - LOOKBACK_WINDOW_MS;
+  const windowStart = Math.max(watermark, lookbackStart);
+  const inWindow = countMessagesSince(chatId, windowStart);
+  const sinceWatermark = countMessagesSince(chatId, watermark);
+  const olderCount = Math.max(0, sinceWatermark - inWindow);
+  const latestMessageAt = getLatestMessageTimestamp(chatId);
+  const totalStored = countMessagesSince(chatId, 0);
+  return {
+    lookbackHours: LOOKBACK_WINDOW_MS / (60 * 60 * 1000),
+    inWindow,
+    olderCount,
+    sinceWatermark,
+    totalStored,
+    canForceLookback: inWindow === 0 && olderCount > 0,
+    latestMessageAt,
+    windowStart,
+    watermark,
+  };
+}
+
+/**
+ * @param {string} chatId
+ * @param {{
+ *   force?: boolean,
+ *   forceLookback?: boolean,
+ *   prefs?: NonNullable<ReturnType<typeof getSummaryPrefs>>,
+ *   settings?: ReturnType<typeof getAiSettings>,
+ * }} [opts]
  */
 async function runSummaryForChat(chatId, opts = {}) {
   if (!chatId) throw new Error("chatId required");
@@ -110,15 +145,24 @@ async function runSummaryForChat(chatId, opts = {}) {
   }
 
   // Bound the catch-up window: go back to the last watermark, but never
-  // further than LOOKBACK_WINDOW_MS — whichever gives the shorter window.
-  const windowStart = Math.max(
-    prefs.lastMessageTs || 0,
-    Date.now() - LOOKBACK_WINDOW_MS,
-  );
+  // further than LOOKBACK_WINDOW_MS — unless the user explicitly forces
+  // lookback (Access → Summarize older messages).
+  const lookbackStart = Date.now() - LOOKBACK_WINDOW_MS;
+  const windowStart = opts.forceLookback
+    ? prefs.lastMessageTs || 0
+    : Math.max(prefs.lastMessageTs || 0, lookbackStart);
   const totalAvailable = countMessagesSince(chatId, windowStart);
   const fetched = getMessagesSince(chatId, windowStart, FETCH_ROW_CAP);
   if (fetched.length === 0) {
-    return { skipped: true, reason: "no_new_messages" };
+    const lookback = getLookbackState(chatId, prefs);
+    if (!opts.forceLookback && lookback.canForceLookback) {
+      return {
+        skipped: true,
+        reason: "outside_lookback",
+        lookback,
+      };
+    }
+    return { skipped: true, reason: "no_new_messages", lookback };
   }
 
   const { kept, truncated: trimmedByTokens } = trimToTokenBudget(
@@ -140,6 +184,11 @@ async function runSummaryForChat(chatId, opts = {}) {
     if (truncated) {
       systemParts.push(
         "Note: older messages in this time slice were left out to fit the input budget. Summarize only what's in the transcript below — don't imply it covers the full period.",
+      );
+    }
+    if (opts.forceLookback) {
+      systemParts.push(
+        "Note: this run was forced past the usual 12-hour catch-up window because the user asked for older stored messages.",
       );
     }
 
@@ -178,7 +227,7 @@ async function runSummaryForChat(chatId, opts = {}) {
       truncated,
     });
 
-    return { skipped: false, summary };
+    return { skipped: false, summary, forcedLookback: Boolean(opts.forceLookback) };
   } finally {
     inFlight.delete(chatId);
   }
@@ -211,4 +260,6 @@ async function tickSummaries() {
 module.exports = {
   runSummaryForChat,
   tickSummaries,
+  getLookbackState,
+  LOOKBACK_WINDOW_MS,
 };
