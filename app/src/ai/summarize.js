@@ -8,7 +8,7 @@ const {
   listEnabledSummaryPrefs,
   getSummaryPrefs,
 } = require("../db/store");
-const { generateViaGateway } = require("./gateway");
+const { generateViaGateway, assertSafeBaseUrl } = require("./gateway");
 
 /** @type {Set<string>} */
 const inFlight = new Set();
@@ -236,6 +236,19 @@ async function runSummaryForChat(chatId, opts = {}) {
 async function tickSummaries() {
   const settings = getAiSettings();
   if (!getAiGatewayApiKey()) return [];
+
+  try {
+    assertSafeBaseUrl(settings.baseUrl);
+  } catch (error) {
+    // Stored setting predates this check, or was edited by hand — fail loud
+    // once instead of retrying every enabled chat against a rejected URL.
+    return [
+      {
+        settingsError: true,
+        error: `AI Gateway Base URL in Settings is no longer valid (${error.message}) Update it in Settings to resume summaries.`,
+      },
+    ];
+  }
 
   const results = [];
   for (const prefs of listEnabledSummaryPrefs()) {

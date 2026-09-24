@@ -1371,15 +1371,16 @@ function syncLookbackUi(lookback) {
 }
 
 /**
+ * @param {string} chatId
  * @param {number} [timeoutMs]
  * @returns {Promise<number>} stored message count after waiting
  */
-async function waitForStoredMessages(timeoutMs = 4500) {
-  if (!selectedSummaryChatId) return 0;
+async function waitForStoredMessages(chatId, timeoutMs = 4500) {
+  if (!chatId) return 0;
   const started = Date.now();
   let total = 0;
   while (Date.now() - started < timeoutMs) {
-    const board = await window.catchup.getSummaryBoard(selectedSummaryChatId);
+    const board = await window.catchup.getSummaryBoard(chatId);
     total = Number(board?.lookback?.totalStored) || 0;
     if (total > 0) return total;
     await new Promise((resolve) => setTimeout(resolve, 450));
@@ -1391,6 +1392,7 @@ async function waitForStoredMessages(timeoutMs = 4500) {
  * @param {{ quiet?: boolean }} [opts]
  */
 async function syncActiveChatMessages(opts = {}) {
+  const chatId = selectedSummaryChatId;
   const status = document.getElementById("summary-status");
   const button = /** @type {HTMLButtonElement | null} */ (
     document.getElementById("summary-sync")
@@ -1412,7 +1414,7 @@ async function syncActiveChatMessages(opts = {}) {
     if (!opts.quiet) {
       setStatus(status, result.message || "Syncing…", { tone: "pending" });
     }
-    const totalStored = await waitForStoredMessages(4500);
+    const totalStored = await waitForStoredMessages(chatId, 4500);
     chatsCache = await window.catchup.listChats();
     if (selectedSummaryChatId) {
       await loadSummaryDetail(selectedSummaryChatId);
@@ -1612,30 +1614,6 @@ function normalizeBaseUrl(url) {
 }
 
 /** @param {string} baseUrl */
-function assertSafeBaseUrlClient(baseUrl) {
-  let parsed;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    throw new Error("Base URL must be a valid http(s) URL.");
-  }
-  if (parsed.protocol === "https:") return;
-  const host = parsed.hostname;
-  if (
-    parsed.protocol === "http:" &&
-    (host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "[::1]" ||
-      host === "::1")
-  ) {
-    return;
-  }
-  throw new Error(
-    "Base URL must use https (http is only allowed for localhost).",
-  );
-}
-
-/** @param {string} baseUrl */
 function isVercelGateway(baseUrl) {
   try {
     return new URL(baseUrl).hostname === VERCEL_GATEWAY_HOST;
@@ -1791,12 +1769,6 @@ async function saveAiSettings() {
       return;
     }
   }
-  try {
-    assertSafeBaseUrlClient(baseUrl);
-  } catch (error) {
-    setErrorStatus(status, error);
-    return;
-  }
   const model =
     /** @type {HTMLInputElement | null} */ (document.getElementById("ai-model"))
       ?.value || "";
@@ -1856,12 +1828,6 @@ async function testAiConnection() {
       });
       return;
     }
-  }
-  try {
-    assertSafeBaseUrlClient(baseUrl);
-  } catch (error) {
-    setErrorStatus(status, error);
-    return;
   }
   const model =
     /** @type {HTMLInputElement | null} */ (document.getElementById("ai-model"))
@@ -2050,6 +2016,13 @@ async function init() {
   });
   window.catchup.onSummariesUpdated?.((payload) => {
     if (openDrawer !== "summaries") return;
+    const results = payload?.results || [];
+    const settingsError = results.find((r) => r?.settingsError);
+    if (settingsError) {
+      setStatus(document.getElementById("summary-status"), settingsError.error, {
+        tone: "error",
+      });
+    }
     const chatIds = payload?.chatIds || [];
     if (
       selectedSummaryChatId &&

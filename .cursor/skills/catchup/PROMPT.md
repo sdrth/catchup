@@ -4,13 +4,7 @@ Catchup is a local, read-only MCP on this Mac. It only exposes chats I allowlist
 
 ## Connect (before answering WhatsApp questions)
 
-If Catchup MCP tools are not already available in this session, start the server over stdio:
-
-```bash
-{{CATCHUP_MCP_COMMAND}}
-```
-
-Cursor / Claude Desktop / other MCP clients — add this server (stdio):
+If Catchup MCP tools are not already available in this session, register this server in your MCP configuration — do not run the command yourself in a terminal/bash tool, it's a long-running stdio server, not a script that returns output:
 
 ```json
 {
@@ -23,9 +17,11 @@ Cursor / Claude Desktop / other MCP clients — add this server (stdio):
 }
 ```
 
+Equivalent, if you only have a raw command to launch it: `{{CATCHUP_MCP_COMMAND}}`
+
 Requires Node.js on PATH. Equivalent from a Catchup checkout: `cd app && pnpm mcp`.
 
-If the command fails or no Catchup tools appear, tell me — I may need to open Catchup → Settings and copy the MCP command / JSON again.
+If no Catchup tools appear after connecting, tell me — I may need to open Catchup → Settings and copy the MCP command / JSON again.
 
 ## Tools (read-only)
 
