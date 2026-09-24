@@ -171,15 +171,33 @@
                   ></textarea>
 
                   <div class="action-bar" id="summary-actions">
-                    <button type="button" id="summary-save" class="btn btn-quiet">
-                      Save schedule
-                    </button>
                     <button type="button" id="summary-run" class="btn btn-accent">
                       Summarize now
                     </button>
+                    <span class="action-hint">Changes save automatically</span>
                   </div>
                 </div>
               </section>
+
+              <div
+                id="consent-confirm"
+                class="consent-confirm"
+                role="alertdialog"
+                aria-labelledby="consent-confirm-title"
+                aria-describedby="consent-confirm-text"
+                hidden
+              >
+                <p id="consent-confirm-title" class="consent-confirm-title"></p>
+                <p id="consent-confirm-text" class="consent-confirm-text"></p>
+                <div class="action-bar">
+                  <button type="button" id="consent-confirm-cancel" class="btn btn-quiet btn-mini">
+                    Cancel
+                  </button>
+                  <button type="button" id="consent-confirm-ok" class="btn btn-danger btn-mini">
+                    Turn off and delete
+                  </button>
+                </div>
+              </div>
 
               <p id="summary-status" class="toast-line" role="status" aria-live="polite"></p>
 
@@ -285,7 +303,7 @@
               autocomplete="off"
               placeholder="Leave blank to keep existing key"
             />
-            <p class="panel-subtitle" id="ai-key-hint">No key saved yet.</p>
+            <p class="panel-subtitle field-hint" id="ai-key-hint">No key saved yet.</p>
 
             <label class="field-label" for="ai-base-url">Base URL</label>
             <input
@@ -316,10 +334,11 @@
               spellcheck="true"
             ></textarea>
 
-            <div class="control-row">
+            <div class="control-row control-row-center">
               <button type="button" id="save-ai-settings" class="btn btn-accent">
                 Save settings
               </button>
+              <span id="ai-dirty-hint" class="action-hint" hidden>Unsaved changes · ⌘S</span>
             </div>
             <p id="ai-save-status" class="toast-line" role="status" aria-live="polite"></p>
           </section>

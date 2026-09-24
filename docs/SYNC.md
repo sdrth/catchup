@@ -17,7 +17,7 @@ Database: `~/Library/Application Support/catchup/catchup.sqlite` (path shown red
 Follows the WhatsApp chat currently open:
 
 - **Allow agents to read this chat** — allowlists and snapshots immediately.
-- **Catch-up summaries** — schedule, tokens, extra prompt; **Save schedule** for field changes.
+- **Catch-up summaries** — schedule, tokens, extra prompt; field changes save automatically.
 - Access off → clears that chat’s local messages and summary cards.
 
 ## Summaries (Settings → Gateway)

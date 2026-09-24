@@ -328,7 +328,7 @@ function renderPreview(messages) {
 
     const when = document.createElement("time");
     when.className = "preview-time";
-    when.textContent = formatTime(message.timestamp);
+    setTimeLabel(when, message.timestamp);
 
     top.append(chat, when);
 
@@ -381,6 +381,138 @@ function appendEmpty(root, message) {
   root.appendChild(empty);
 }
 
+const IS_MAC = /Mac/i.test(navigator.platform || navigator.userAgent || "");
+const STATUS_CLEAR_MS = 4500;
+/** @type {WeakMap<HTMLElement, number>} */
+const statusTimers = new WeakMap();
+
+/**
+ * ipcRenderer.invoke wraps main-process errors as
+ * "Error invoking remote method 'x': Error: …" — show only the useful part.
+ * @param {unknown} error
+ */
+function errorText(error) {
+  const raw = String(/** @type {any} */ (error)?.message || error || "");
+  return (
+    raw.replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, "") ||
+    "Something went wrong."
+  );
+}
+
+/**
+ * Status line under a control. Success/info fades after a few seconds;
+ * errors and pending ("…") messages stay until replaced.
+ * @param {HTMLElement | null} el
+ * @param {string} text
+ * @param {{ tone?: 'info' | 'error' | 'pending', action?: { label: string, run: () => void } }} [opts]
+ */
+function setStatus(el, text, opts = {}) {
+  if (!el) return;
+  const tone = opts.tone || "info";
+  const timer = statusTimers.get(el);
+  if (timer) clearTimeout(timer);
+  el.classList.toggle("is-error", tone === "error");
+  el.classList.toggle("is-pending", tone === "pending");
+  el.replaceChildren(document.createTextNode(text));
+  if (opts.action) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "text-link toast-action";
+    btn.textContent = opts.action.label;
+    btn.addEventListener("click", opts.action.run);
+    el.append(" ", btn);
+  }
+  if (tone === "info" && text) {
+    statusTimers.set(
+      el,
+      window.setTimeout(() => {
+        el.replaceChildren();
+        statusTimers.delete(el);
+      }, STATUS_CLEAR_MS),
+    );
+  }
+}
+
+/** Errors that the user fixes in Settings get a one-click way there. */
+function setErrorStatus(el, error) {
+  const text = errorText(error);
+  const needsSettings = /in Settings/i.test(text);
+  setStatus(el, text, {
+    tone: "error",
+    action: needsSettings
+      ? { label: "Open Settings", run: () => window.catchup.switchApp("settings") }
+      : undefined,
+  });
+}
+
+/**
+ * Briefly swap a button's label (e.g. "Copied") without changing its width.
+ * @param {HTMLElement | null} button
+ * @param {string} label
+ */
+function flashButton(button, label) {
+  if (!button) return;
+  const original = button.dataset.label || button.textContent?.trim() || "";
+  button.dataset.label = original;
+  button.style.minWidth = `${button.offsetWidth}px`;
+  button.textContent = label;
+  button.classList.add("is-flashed");
+  const prev = Number(button.dataset.flashTimer);
+  if (prev) clearTimeout(prev);
+  button.dataset.flashTimer = String(
+    window.setTimeout(() => {
+      button.textContent = original;
+      button.classList.remove("is-flashed");
+      button.style.minWidth = "";
+      delete button.dataset.flashTimer;
+    }, 1600),
+  );
+}
+
+/**
+ * Busy state for async buttons: disabled + temporary label.
+ * @param {HTMLButtonElement | null} button
+ * @param {string | null} busyLabel null restores the original label
+ */
+function setBusy(button, busyLabel) {
+  if (!button) return;
+  if (busyLabel) {
+    button.dataset.label = button.dataset.label || button.textContent?.trim() || "";
+    button.style.minWidth = `${button.offsetWidth}px`;
+    button.textContent = busyLabel;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  } else {
+    if (button.dataset.label) button.textContent = button.dataset.label;
+    button.style.minWidth = "";
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
+}
+
+/** Re-render relative timestamps ("5 mins ago") so they don't go stale. */
+function refreshRelativeTimes() {
+  document.querySelectorAll("[data-ts]").forEach((el) => {
+    const node = /** @type {HTMLElement} */ (el);
+    const text = formatTime(node.dataset.ts);
+    const suffix = node.dataset.tsSuffix || "";
+    node.textContent = `${text}${suffix}`;
+  });
+}
+
+/**
+ * @param {HTMLElement} el
+ * @param {number | string} ts
+ * @param {string} [suffix]
+ */
+function setTimeLabel(el, ts, suffix = "") {
+  el.dataset.ts = String(ts ?? "");
+  if (suffix) el.dataset.tsSuffix = suffix;
+  el.textContent = `${formatTime(ts)}${suffix}`;
+  const n = Number(ts);
+  if (n) el.title = new Date(n).toLocaleString();
+}
+
 function renderMcp(mcp) {
   mcpCache = mcp;
   const commandInput = /** @type {HTMLInputElement | null} */ (
@@ -399,32 +531,33 @@ function renderMcp(mcp) {
   }
 }
 
-async function copyText(text, okLabel) {
+async function copyText(text, okLabel, button) {
   const status = document.getElementById("copy-status");
   try {
     await window.catchup.copyText(text);
-    if (status) status.textContent = okLabel;
+    flashButton(button, "Copied ✓");
+    setStatus(status, okLabel);
   } catch {
-    if (status) {
-      status.textContent = "Couldn’t copy — select the text and copy manually.";
-    }
+    setStatus(status, "Couldn’t copy — select the text and copy manually.", {
+      tone: "error",
+    });
   }
 }
 
 function bindCopy(buttonId, getText, labels) {
-  document.getElementById(buttonId)?.addEventListener("click", () => {
+  const button = document.getElementById(buttonId);
+  button?.addEventListener("click", () => {
     void (async () => {
       const text = getText();
       if (!text || !String(text).trim()) {
-        const status = document.getElementById("copy-status");
-        if (status) {
-          status.textContent =
-            labels.empty ||
-            "Nothing to copy yet — open Settings after WhatsApp loads.";
-        }
+        setStatus(
+          document.getElementById("copy-status"),
+          labels.empty || "Nothing to copy yet — open Settings after WhatsApp loads.",
+          { tone: "error" },
+        );
         return;
       }
-      await copyText(text, labels.ok);
+      await copyText(text, labels.ok, button);
     })();
   });
 }
@@ -432,6 +565,18 @@ function bindCopy(buttonId, getText, labels) {
 async function refreshPreview() {
   const messages = await window.catchup.getPreview(40);
   renderPreview(messages);
+}
+
+async function refreshPreviewFromButton() {
+  const button = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById("refresh-preview")
+  );
+  setBusy(button, "Refreshing…");
+  try {
+    await refreshLocalStore();
+  } finally {
+    setBusy(button, null);
+  }
 }
 
 function renderAgentsProof(stats) {
@@ -467,7 +612,8 @@ async function refreshLocalStore() {
 }
 
 async function refreshSettingsPage() {
-  await Promise.all([refreshLocalStore(), refreshAiSettings()]);
+  // Keep unsaved Gateway edits when Settings is reopened.
+  await Promise.all([refreshLocalStore(), aiDirty ? null : refreshAiSettings()]);
 }
 
 function matchChatInCache(hint) {
@@ -547,10 +693,116 @@ function coupleChatToggles(changed) {
   syncSummaryOptionsVisibility();
 }
 
-/** Instant apply for Access toggles (core consent job). */
+/** @type {null | 'sync' | 'summary'} */
+let pendingConsentOff = null;
+
+function hideConsentConfirm() {
+  pendingConsentOff = null;
+  const box = document.getElementById("consent-confirm");
+  if (box) box.hidden = true;
+}
+
+/**
+ * Turning a toggle off deletes local data — ask first when there is any.
+ * @param {'sync' | 'summary'} changed
+ */
+function showConsentConfirm(changed, chat) {
+  const box = document.getElementById("consent-confirm");
+  const title = document.getElementById("consent-confirm-title");
+  const text = document.getElementById("consent-confirm-text");
+  if (!box) return;
+  const messages = Number(chat?.messageCount) || 0;
+  const notes = Number(chat?.summaryCount) || 0;
+  const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+  if (changed === "sync") {
+    if (title) title.textContent = "Stop sharing this chat?";
+    const parts = [];
+    if (messages) parts.push(plural(messages, "synced message"));
+    if (notes) parts.push(plural(notes, "summary", "summaries"));
+    if (text) {
+      text.textContent = `Agents lose access, and ${parts.join(" and ")} stored on this Mac will be deleted. WhatsApp itself is not affected.`;
+    }
+  } else {
+    if (title) title.textContent = "Turn off catch-up summaries?";
+    if (text) {
+      text.textContent = `${plural(notes, "saved summary", "saved summaries")} for this chat will be deleted. The chat stays shared with agents.`;
+    }
+  }
+  pendingConsentOff = changed;
+  box.hidden = false;
+  box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  document.getElementById("consent-confirm-cancel")?.focus({ preventScroll: true });
+}
+
+/**
+ * Instant apply for Access toggles (core consent job).
+ * @param {'sync' | 'summary'} changed
+ */
 async function onConsentToggle(changed) {
+  const input = /** @type {HTMLInputElement | null} */ (
+    document.getElementById(changed === "sync" ? "chat-sync-enabled" : "summary-enabled")
+  );
+  const chat = chatsCache.find((c) => c.id === selectedSummaryChatId);
+  const turningOff = input && !input.checked;
+  const losesData =
+    changed === "sync"
+      ? (Number(chat?.messageCount) || 0) + (Number(chat?.summaryCount) || 0) > 0
+      : (Number(chat?.summaryCount) || 0) > 0;
+  if (turningOff && losesData && chat) {
+    // Hold the switch where it was until the user confirms.
+    input.checked = true;
+    showConsentConfirm(changed, chat);
+    return;
+  }
+  hideConsentConfirm();
   coupleChatToggles(changed);
   await saveSummaryPrefs({ quiet: false, reason: "toggle" });
+}
+
+async function confirmConsentOff() {
+  const changed = pendingConsentOff;
+  hideConsentConfirm();
+  if (!changed) return;
+  const input = /** @type {HTMLInputElement | null} */ (
+    document.getElementById(changed === "sync" ? "chat-sync-enabled" : "summary-enabled")
+  );
+  if (input) input.checked = false;
+  coupleChatToggles(changed);
+  await saveSummaryPrefs({ quiet: false, reason: "toggle" });
+}
+
+/** Schedule fields autosave shortly after the user stops editing. */
+let scheduleSaveTimer = 0;
+function queueScheduleSave(delay = 600) {
+  if (scheduleSaveTimer) clearTimeout(scheduleSaveTimer);
+  scheduleSaveTimer = window.setTimeout(() => {
+    scheduleSaveTimer = 0;
+    void saveSummaryPrefs({ reason: "schedule" });
+  }, delay);
+}
+
+function flushScheduleSave() {
+  if (!scheduleSaveTimer) return null;
+  clearTimeout(scheduleSaveTimer);
+  scheduleSaveTimer = 0;
+  return saveSummaryPrefs({ reason: "schedule" });
+}
+
+/**
+ * @param {string} id
+ * @param {number} fallback
+ */
+function readClampedNumber(id, fallback) {
+  const input = /** @type {HTMLInputElement | null} */ (document.getElementById(id));
+  if (!input) return fallback;
+  let n = Math.round(Number(input.value));
+  if (!Number.isFinite(n) || input.value.trim() === "") n = fallback;
+  const min = Number(input.min);
+  const max = Number(input.max);
+  if (input.min !== "" && n < min) n = min;
+  if (input.max !== "" && n > max) n = max;
+  if (String(n) !== input.value) input.value = String(n);
+  return n;
 }
 
 async function followActiveWaChat() {
@@ -591,11 +843,15 @@ async function followActiveWaChat() {
   }
 
   const changed = selectedSummaryChatId !== match.id;
+  if (changed) {
+    // Persist edits for the chat we're leaving before switching.
+    await flushScheduleSave();
+    hideConsentConfirm();
+  }
   selectedSummaryChatId = match.id;
   await loadSummaryDetail(match.id);
   if (changed) {
-    const status = document.getElementById("summary-status");
-    if (status) status.textContent = "";
+    setStatus(document.getElementById("summary-status"), "");
   }
 }
 
@@ -659,6 +915,9 @@ async function loadSummaryDetail(chatId) {
   );
   if (syncEnabled) syncEnabled.checked = Boolean(chat.allowed);
 
+  // A background refresh mustn't overwrite fields the user is mid-edit on.
+  const editing = scheduleSaveTimer !== 0;
+
   const enabled = /** @type {HTMLInputElement | null} */ (
     document.getElementById("summary-enabled")
   );
@@ -667,6 +926,7 @@ async function loadSummaryDetail(chatId) {
   updateShareStatus(Boolean(chat.allowed));
   syncSummaryOptionsVisibility();
 
+  if (!editing) {
   document.querySelectorAll('input[name="summary-mode"]').forEach((input) => {
     const el = /** @type {HTMLInputElement} */ (input);
     el.checked = el.value === (chat.summaryMode || "messages");
@@ -689,6 +949,7 @@ async function loadSummaryDetail(chatId) {
     document.getElementById("summary-extra-prompt")
   );
   if (extra) extra.value = chat.summaryExtraPrompt || "";
+  }
 
   const board = await window.catchup.getSummaryBoard(chatId);
   renderSummaryCards(board);
@@ -852,6 +1113,7 @@ function appendSummaryCard(root, summary, opts = {}) {
   const head = document.createElement("button");
   head.type = "button";
   head.className = "summary-card-head";
+  head.setAttribute("aria-expanded", String(!collapsed));
   const title = document.createElement("span");
   title.className = "summary-card-title";
   title.textContent = collapsed ? "Earlier summary" : "Latest summary";
@@ -859,9 +1121,7 @@ function appendSummaryCard(root, summary, opts = {}) {
   metaGroup.className = "summary-card-meta-group";
   const meta = document.createElement("span");
   meta.className = "summary-card-meta";
-  meta.textContent = `${formatTime(summary.createdAt)} · ${
-    summary.messageCount || 0
-  } msgs`;
+  setTimeLabel(meta, summary.createdAt, ` · ${summary.messageCount || 0} msgs`);
   metaGroup.append(meta);
   if (summary.truncated) {
     const flag = document.createElement("span");
@@ -871,9 +1131,14 @@ function appendSummaryCard(root, summary, opts = {}) {
     flag.textContent = "Incomplete";
     metaGroup.append(flag);
   }
+  const chevron = document.createElement("span");
+  chevron.className = "summary-card-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  metaGroup.append(chevron);
   head.append(title, metaGroup);
   head.addEventListener("click", () => {
-    article.classList.toggle("is-collapsed");
+    const nowCollapsed = article.classList.toggle("is-collapsed");
+    head.setAttribute("aria-expanded", String(!nowCollapsed));
   });
 
   const body = document.createElement("div");
@@ -951,7 +1216,7 @@ function renderSummaryCards(board) {
   if (!board?.latest) {
     appendEmpty(
       root,
-      "No notes yet. Turn on catch-up summaries, save the schedule, then Summarize now.",
+      "No notes yet. Turn on catch-up summaries above, then Summarize now.",
     );
     summaryPaging.chatId = null;
     summaryPaging.cursor = null;
@@ -1004,21 +1269,9 @@ async function saveSummaryPrefs(opts = {}) {
     /** @type {HTMLInputElement | null} */ (
       document.querySelector('input[name="summary-mode"]:checked')
     )?.value || "messages";
-  const threshold = Number(
-    /** @type {HTMLInputElement | null} */ (
-      document.getElementById("summary-threshold")
-    )?.value || 20,
-  );
-  const interval = Number(
-    /** @type {HTMLInputElement | null} */ (
-      document.getElementById("summary-interval")
-    )?.value || 60,
-  );
-  const maxTokens = Number(
-    /** @type {HTMLInputElement | null} */ (
-      document.getElementById("summary-max-tokens")
-    )?.value || 512,
-  );
+  const threshold = readClampedNumber("summary-threshold", 20);
+  const interval = readClampedNumber("summary-interval", 60);
+  const maxTokens = readClampedNumber("summary-max-tokens", 512);
   const extra =
     /** @type {HTMLTextAreaElement | null} */ (
       document.getElementById("summary-extra-prompt")
@@ -1051,24 +1304,20 @@ async function saveSummaryPrefs(opts = {}) {
       else chatsCache.unshift(row);
     }
 
-    if (status && !opts.quiet) {
+    if (!opts.quiet) {
       if (opts.reason === "schedule") {
-        status.textContent = summarizeOn
-          ? "Schedule saved."
-          : "Saved.";
+        setStatus(status, "Saved.");
       } else if (summarizeOn) {
-        status.textContent = "Shared · catch-up summaries on.";
+        setStatus(status, "Shared · catch-up summaries on.");
       } else if (syncOn) {
-        status.textContent =
-          "Shared with agents — keep the chat open while messages sync.";
+        setStatus(status, "Shared with agents — keep the chat open while messages sync.");
       } else {
-        status.textContent =
-          "Private again — local messages and notes for this chat were cleared.";
+        setStatus(status, "Private — nothing from this chat is stored on this Mac.");
       }
     }
     await loadSummaryDetail(selectedSummaryChatId);
   } catch (error) {
-    if (status) status.textContent = String(error?.message || error);
+    setErrorStatus(status, error);
   }
 }
 
@@ -1078,27 +1327,30 @@ async function runSummaryNow() {
   const button = /** @type {HTMLButtonElement | null} */ (
     document.getElementById("summary-run")
   );
-  if (button) button.disabled = true;
-  if (status) status.textContent = "Generating summary…";
+  setBusy(button, "Summarizing…");
+  setStatus(status, "Generating summary…", { tone: "pending" });
   try {
-    await saveSummaryPrefs();
+    if (scheduleSaveTimer) clearTimeout(scheduleSaveTimer);
+    scheduleSaveTimer = 0;
+    await saveSummaryPrefs({ quiet: true });
     const result = await window.catchup.runSummaryNow(selectedSummaryChatId);
     if (result?.skipped) {
-      if (status) {
-        status.textContent =
-          result.reason === "no_new_messages"
-            ? "No new messages since the last summary."
-            : `Skipped (${result.reason}).`;
-      }
-    } else if (status) {
-      status.textContent = "Summary ready.";
+      setStatus(
+        status,
+        result.reason === "no_new_messages"
+          ? "No new messages since the last summary."
+          : `Skipped (${result.reason}).`,
+      );
+    } else {
+      setStatus(status, "Summary ready.");
     }
-    await loadSummaryDetail(selectedSummaryChatId);
     chatsCache = await window.catchup.listChats();
+    await loadSummaryDetail(selectedSummaryChatId);
   } catch (error) {
-    if (status) status.textContent = String(error?.message || error);
+    setErrorStatus(status, error);
   } finally {
-    if (button) button.disabled = false;
+    setBusy(button, null);
+    syncSummaryOptionsVisibility();
   }
 }
 
@@ -1107,13 +1359,19 @@ async function refreshAiSettings() {
   const keyHint = document.getElementById("ai-key-hint");
   if (keyHint) {
     keyHint.textContent = settings.apiKeySet
-      ? "API key is saved on this Mac."
+      ? "✓ API key is saved on this Mac."
       : "No key saved yet — create one in the Vercel AI Gateway dashboard.";
+    keyHint.classList.toggle("is-good", Boolean(settings.apiKeySet));
   }
   const keyInput = /** @type {HTMLInputElement | null} */ (
     document.getElementById("ai-api-key")
   );
-  if (keyInput) keyInput.value = "";
+  if (keyInput) {
+    keyInput.value = "";
+    keyInput.placeholder = settings.apiKeySet
+      ? "•••••••• saved — paste a new key to replace"
+      : "Paste your Gateway API key";
+  }
   const base = /** @type {HTMLInputElement | null} */ (
     document.getElementById("ai-base-url")
   );
@@ -1130,6 +1388,17 @@ async function refreshAiSettings() {
     document.getElementById("ai-system-prompt")
   );
   if (prompt) prompt.value = settings.systemPrompt || "";
+  setAiDirty(false);
+}
+
+let aiDirty = false;
+function setAiDirty(dirty) {
+  aiDirty = dirty;
+  const hint = document.getElementById("ai-dirty-hint");
+  if (hint) {
+    hint.hidden = !dirty;
+    hint.textContent = `Unsaved changes · ${IS_MAC ? "⌘S" : "Ctrl+S"}`;
+  }
 }
 
 async function saveAiSettings() {
@@ -1152,6 +1421,10 @@ async function saveAiSettings() {
       document.getElementById("ai-system-prompt")
     )?.value || "";
 
+  const button = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById("save-ai-settings")
+  );
+  setBusy(button, "Saving…");
   try {
     /** @type {Record<string, unknown>} */
     const patch = {
@@ -1162,10 +1435,37 @@ async function saveAiSettings() {
     };
     if (apiKey.trim()) patch.apiKey = apiKey.trim();
     await window.catchup.setAiSettings(patch);
-    if (status) status.textContent = "Settings saved.";
     await refreshAiSettings();
+    setStatus(status, "Settings saved.");
   } catch (error) {
-    if (status) status.textContent = String(error?.message || error);
+    setErrorStatus(status, error);
+  } finally {
+    setBusy(button, null);
+  }
+}
+
+/** Esc closes the confirm / drawer / Settings; ⌘S saves Settings. */
+function onGlobalKeyDown(event) {
+  const mod = IS_MAC ? event.metaKey : event.ctrlKey;
+  if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "s") {
+    if (settingsPageOpen) {
+      event.preventDefault();
+      void saveAiSettings();
+    }
+    return;
+  }
+  if (event.key !== "Escape" || event.defaultPrevented) return;
+  if (pendingConsentOff) {
+    event.preventDefault();
+    hideConsentConfirm();
+    return;
+  }
+  if (openDrawer === "summaries") {
+    event.preventDefault();
+    window.catchup.switchApp("summaries");
+  } else if (settingsPageOpen) {
+    event.preventDefault();
+    window.catchup.switchApp("whatsapp");
   }
 }
 
@@ -1179,15 +1479,35 @@ async function init() {
     ?.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      void refreshPreview();
+      void refreshPreviewFromButton();
     });
   document.getElementById("close-summaries")?.addEventListener("click", () => {
     window.catchup.switchApp("summaries");
   });
   bindDrawerResize();
+  document.querySelectorAll('input[name="summary-mode"]').forEach((el) =>
+    el.addEventListener("change", () => {
+      syncModeFields();
+      queueScheduleSave(0);
+    }),
+  );
+  for (const id of ["summary-threshold", "summary-interval", "summary-max-tokens"]) {
+    const input = document.getElementById(id);
+    input?.addEventListener("input", () => queueScheduleSave(900));
+    input?.addEventListener("change", () => queueScheduleSave(0));
+  }
+  const extraPrompt = document.getElementById("summary-extra-prompt");
+  extraPrompt?.addEventListener("input", () => queueScheduleSave(1200));
+  extraPrompt?.addEventListener("blur", () => void flushScheduleSave());
   document
-    .querySelectorAll('input[name="summary-mode"]')
-    .forEach((el) => el.addEventListener("change", syncModeFields));
+    .getElementById("consent-confirm-cancel")
+    ?.addEventListener("click", () => {
+      hideConsentConfirm();
+      setStatus(document.getElementById("summary-status"), "Nothing changed.");
+    });
+  document
+    .getElementById("consent-confirm-ok")
+    ?.addEventListener("click", () => void confirmConsentOff());
   document.getElementById("summary-enabled")?.addEventListener("change", () => {
     void onConsentToggle("summary");
   });
@@ -1196,15 +1516,27 @@ async function init() {
     ?.addEventListener("change", () => {
       void onConsentToggle("sync");
     });
-  document.getElementById("summary-save")?.addEventListener("click", () => {
-    void saveSummaryPrefs({ reason: "schedule" });
-  });
   document
     .getElementById("summary-run")
     ?.addEventListener("click", () => void runSummaryNow());
   document
     .getElementById("save-ai-settings")
     ?.addEventListener("click", () => void saveAiSettings());
+  for (const id of ["ai-api-key", "ai-base-url", "ai-model", "ai-zdr", "ai-system-prompt"]) {
+    const el = document.getElementById(id);
+    el?.addEventListener("input", () => setAiDirty(true));
+    el?.addEventListener("change", () => setAiDirty(true));
+  }
+  for (const id of ["ai-api-key", "ai-base-url", "ai-model"]) {
+    document.getElementById(id)?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void saveAiSettings();
+      }
+    });
+  }
+  document.addEventListener("keydown", onGlobalKeyDown);
+  window.setInterval(refreshRelativeTimes, 30_000);
   document.getElementById("ai-gateway-docs")?.addEventListener("click", (e) => {
     e.preventDefault();
     void window.catchup.openExternal("https://vercel.com/docs/ai-gateway");
