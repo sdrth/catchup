@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **UI: WhatsApp look, restrained glass.** Restyled on WhatsApp Web's dark palette (`#111b21` / `#202c33` surfaces, `#00a884` green, `#e9edef` / `#8696a0` text): flat panels, WhatsApp-style switches, pill buttons, inputs and chat-list preview rows; summaries render as message bubbles. Removed the decorative glass gradients, sheens, glows, drop shadows and pulsing dot. Glass (translucent + blur) remains only on the Access and Settings headers, where content scrolls underneath. Sidebar uses monochrome rail icons with a filled active pill; Access gets a shield icon.
 - **UX: confirm before deleting.** Turning off Access or catch-up summaries for a chat that has stored messages/notes now shows an inline confirm stating exactly what will be deleted (Cancel / Esc keeps it on).
 - **UX: schedule autosaves.** Access schedule fields (mode, count, minutes, max tokens, extra instructions) save as you edit and are clamped to their valid ranges; the **Save schedule** button is gone. Pending edits are flushed when you switch chats.
 - **UX: clearer feedback.** Status lines fade after a few seconds; errors stay, render in red, drop the `Error invoking remote method …` prefix, and offer **Open Settings** when the fix lives there. Busy labels on **Summarize now** / **Save settings** / **Refresh**; copy buttons flash **Copied ✓**.
