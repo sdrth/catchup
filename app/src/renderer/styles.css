@@ -901,6 +901,55 @@ body {
   color: var(--accent);
 }
 
+.ai-zdr-row[hidden],
+#ai-base-url-field[hidden] {
+  display: none !important;
+}
+
+.field-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238696a0' d='M1.4 1.4 6 6l4.6-4.6L12 2.8 6 8.8 0 2.8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+  cursor: pointer;
+}
+
+#ai-base-url-field {
+  margin-top: 12px;
+}
+
+#ai-base-url-field .field-label {
+  margin-top: 0;
+}
+
+#ai-base-url-field .field-input {
+  display: block;
+  width: 100%;
+}
+
+.ai-test-row {
+  margin: 10px 0 4px;
+  align-items: center;
+  gap: 12px;
+}
+
+.ai-test-row .toast-line {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+#summary-run-older[hidden],
+#summary-sync[hidden],
+#summary-lookback-hint[hidden] {
+  display: none !important;
+}
+
+#summary-lookback-hint {
+  margin-top: 8px;
+}
+
 .proof-inline {
   display: flex;
   align-items: baseline;
@@ -1094,7 +1143,8 @@ body {
 }
 
 .field-input.mono,
-.code-block {
+.code-block,
+.field-hint .mono {
   font-family: var(--font-mono);
   font-size: 12px;
 }

@@ -893,6 +893,7 @@ async function loadSummaryDetail(chatId) {
   if (!chat) {
     if (empty) empty.hidden = false;
     if (body) body.hidden = true;
+    syncLookbackUi(null);
     return;
   }
   if (empty) empty.hidden = true;
@@ -952,6 +953,7 @@ async function loadSummaryDetail(chatId) {
 
   const board = await window.catchup.getSummaryBoard(chatId);
   renderSummaryCards(board);
+  syncLookbackUi(board?.lookback);
 }
 
 const MD_INLINE_RE =
@@ -1213,9 +1215,12 @@ function renderSummaryCards(board) {
   root.replaceChildren();
 
   if (!board?.latest) {
+    const lookback = board?.lookback;
     appendEmpty(
       root,
-      "No notes yet. Turn on catch-up summaries above, then Summarize now.",
+      lookback?.canForceLookback
+        ? `No notes yet. Nothing in the last ${lookback.lookbackHours} hours — ${lookback.olderCount} older message${lookback.olderCount === 1 ? "" : "s"} are stored. Use Summarize older messages below.`
+        : "No notes yet. Turn on catch-up summaries above, then Summarize now.",
     );
     summaryPaging.chatId = null;
     summaryPaging.cursor = null;
@@ -1320,28 +1325,213 @@ async function saveSummaryPrefs(opts = {}) {
   }
 }
 
-async function runSummaryNow() {
+/**
+ * @param {{
+ *   lookbackHours?: number,
+ *   inWindow?: number,
+ *   olderCount?: number,
+ *   totalStored?: number,
+ *   canForceLookback?: boolean,
+ *   latestMessageAt?: number,
+ * } | null | undefined} lookback
+ */
+function syncLookbackUi(lookback) {
+  const forceBtn = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById("summary-run-older")
+  );
+  const syncBtn = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById("summary-sync")
+  );
+  const hint = document.getElementById("summary-lookback-hint");
+  const canForce = Boolean(lookback?.canForceLookback);
+  const needsSync = Boolean(lookback) && !(lookback.totalStored > 0);
+  if (forceBtn) forceBtn.hidden = !canForce;
+  if (syncBtn) syncBtn.hidden = !needsSync;
+  if (!hint) return;
+  if (canForce) {
+    const hours = lookback.lookbackHours;
+    const n = lookback?.olderCount || 0;
+    const latest = lookback?.latestMessageAt
+      ? formatTime(lookback.latestMessageAt)
+      : "";
+    hint.hidden = false;
+    hint.textContent = latest
+      ? `No messages in the last ${hours} hours (latest ${latest}). ${n} older message${n === 1 ? "" : "s"} still on this Mac — Summarize older messages bypasses the ${hours}h window.`
+      : `No messages in the last ${hours} hours. ${n} older message${n === 1 ? "" : "s"} still on this Mac — Summarize older messages bypasses the ${hours}h window.`;
+    return;
+  }
+  if (needsSync) {
+    hint.hidden = false;
+    hint.textContent =
+      "Nothing from this chat is stored on this Mac yet. Keep it open in WhatsApp, then Sync messages (or Summarize now will try to sync first).";
+    return;
+  }
+  hint.hidden = true;
+  hint.textContent = "";
+}
+
+/**
+ * @param {number} [timeoutMs]
+ * @returns {Promise<number>} stored message count after waiting
+ */
+async function waitForStoredMessages(timeoutMs = 4500) {
+  if (!selectedSummaryChatId) return 0;
+  const started = Date.now();
+  let total = 0;
+  while (Date.now() - started < timeoutMs) {
+    const board = await window.catchup.getSummaryBoard(selectedSummaryChatId);
+    total = Number(board?.lookback?.totalStored) || 0;
+    if (total > 0) return total;
+    await new Promise((resolve) => setTimeout(resolve, 450));
+  }
+  return total;
+}
+
+/**
+ * @param {{ quiet?: boolean }} [opts]
+ */
+async function syncActiveChatMessages(opts = {}) {
+  const status = document.getElementById("summary-status");
+  const button = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById("summary-sync")
+  );
+  if (!opts.quiet) {
+    setBusy(button, "Syncing…");
+    setStatus(status, "Syncing messages from the open chat…", {
+      tone: "pending",
+    });
+  }
+  try {
+    const result = await window.catchup.forceWhatsAppSync();
+    if (!result?.ok) {
+      setStatus(status, result?.message || "Couldn’t sync right now.", {
+        tone: "error",
+      });
+      return { ok: false, totalStored: 0 };
+    }
+    if (!opts.quiet) {
+      setStatus(status, result.message || "Syncing…", { tone: "pending" });
+    }
+    const totalStored = await waitForStoredMessages(4500);
+    chatsCache = await window.catchup.listChats();
+    if (selectedSummaryChatId) {
+      await loadSummaryDetail(selectedSummaryChatId);
+    }
+    if (totalStored > 0) {
+      setStatus(
+        status,
+        `Synced ${totalStored} message${totalStored === 1 ? "" : "s"} on this Mac.`,
+      );
+      return { ok: true, totalStored };
+    }
+    setStatus(
+      status,
+      "Sync ran, but nothing landed yet — scroll the open chat so messages are visible, then try Sync again.",
+      { tone: "error" },
+    );
+    return { ok: false, totalStored: 0 };
+  } catch (error) {
+    setErrorStatus(status, error);
+    return { ok: false, totalStored: 0 };
+  } finally {
+    if (!opts.quiet) setBusy(button, null);
+  }
+}
+
+/**
+ * @param {{ forceLookback?: boolean }} [opts]
+ */
+async function runSummaryNow(opts = {}) {
   if (!selectedSummaryChatId) return;
   const status = document.getElementById("summary-status");
   const button = /** @type {HTMLButtonElement | null} */ (
-    document.getElementById("summary-run")
+    document.getElementById(
+      opts.forceLookback ? "summary-run-older" : "summary-run",
+    )
   );
-  setBusy(button, "Summarizing…");
-  setStatus(status, "Generating summary…", { tone: "pending" });
+  setBusy(button, opts.forceLookback ? "Summarizing older…" : "Summarizing…");
+  setStatus(
+    status,
+    opts.forceLookback
+      ? "Summarizing older stored messages…"
+      : "Generating summary…",
+    { tone: "pending" },
+  );
   try {
     if (scheduleSaveTimer) clearTimeout(scheduleSaveTimer);
     scheduleSaveTimer = 0;
     await saveSummaryPrefs({ quiet: true });
-    const result = await window.catchup.runSummaryNow(selectedSummaryChatId);
+
+    /** @param {boolean} forceLookback */
+    async function invoke(forceLookback) {
+      return window.catchup.runSummaryNow(selectedSummaryChatId, {
+        forceLookback,
+      });
+    }
+
+    let result = await invoke(Boolean(opts.forceLookback));
+
+    // Empty local store: try one force-sync, then summarize again.
+    if (
+      result?.skipped &&
+      result.reason === "no_new_messages" &&
+      !(result.lookback?.totalStored > 0) &&
+      !opts.forceLookback
+    ) {
+      setStatus(status, "No local messages yet — syncing this chat first…", {
+        tone: "pending",
+      });
+      const synced = await syncActiveChatMessages({ quiet: true });
+      if (synced.ok && synced.totalStored > 0) {
+        setStatus(status, "Generating summary…", { tone: "pending" });
+        result = await invoke(false);
+        // If sync pulled only older-than-12h traffic, offer / run older path.
+        if (result?.skipped && result.reason === "outside_lookback") {
+          syncLookbackUi(result.lookback);
+          setStatus(status, "Summarizing older stored messages…", {
+            tone: "pending",
+          });
+          result = await invoke(true);
+        }
+      } else if (!synced.ok) {
+        // syncActiveChatMessages already set status
+        return;
+      }
+    }
+
     if (result?.skipped) {
+      if (result.reason === "outside_lookback") {
+        syncLookbackUi(result.lookback);
+        const n = result.lookback?.olderCount || 0;
+        const hours = result.lookback?.lookbackHours;
+        setStatus(
+          status,
+          hours != null
+            ? `Nothing in the last ${hours} hours — ${n} older message${n === 1 ? "" : "s"} stored. Use Summarize older messages.`
+            : `Nothing new in the catch-up window — ${n} older message${n === 1 ? "" : "s"} stored. Use Summarize older messages.`,
+          { tone: "error" },
+        );
+      } else if (result.reason === "no_new_messages") {
+        syncLookbackUi(result.lookback);
+        if (!(result.lookback?.totalStored > 0)) {
+          setStatus(
+            status,
+            "Still no messages on this Mac — keep the chat open, scroll to load history, then Sync messages.",
+            { tone: "error" },
+          );
+        } else {
+          setStatus(status, "No new messages since the last summary.");
+        }
+      } else {
+        setStatus(status, `Skipped (${result.reason}).`);
+      }
+    } else {
       setStatus(
         status,
-        result.reason === "no_new_messages"
-          ? "No new messages since the last summary."
-          : `Skipped (${result.reason}).`,
+        result?.forcedLookback
+          ? "Summary ready (included older messages)."
+          : "Summary ready.",
       );
-    } else {
-      setStatus(status, "Summary ready.");
     }
     chatsCache = await window.catchup.listChats();
     await loadSummaryDetail(selectedSummaryChatId);
@@ -1353,13 +1543,185 @@ async function runSummaryNow() {
   }
 }
 
+const VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh";
+// Keep in sync with DEFAULT_AI_GATEWAY_* in app/src/db/store.js and
+// DEFAULT_BASE_URL in app/src/ai/gateway.js (UI presets are the Settings source).
+const DEFAULT_AI_BASE_URL = "https://ai-gateway.vercel.sh/v1";
+const DEFAULT_AI_MODEL = "anthropic/claude-sonnet-4.5";
+
+/** @typedef {{ id: string, label: string, baseUrl: string | null, model: string, keyHint?: string }} AiProviderPreset */
+
+/** @type {AiProviderPreset[]} */
+const AI_PROVIDER_PRESETS = [
+  {
+    id: "vercel",
+    label: "Vercel AI Gateway",
+    baseUrl: DEFAULT_AI_BASE_URL,
+    model: DEFAULT_AI_MODEL,
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4.1-mini",
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    model: "claude-sonnet-4-5",
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "anthropic/claude-sonnet-4.5",
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-2.0-flash",
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    baseUrl: "https://api.groq.com/openai/v1",
+    model: "llama-3.3-70b-versatile",
+  },
+  {
+    id: "ollama",
+    label: "Ollama (local)",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    model: "llama3.2",
+    keyHint: "Local Ollama usually needs no key — paste any placeholder if required.",
+  },
+  {
+    id: "custom",
+    label: "Custom…",
+    baseUrl: null,
+    model: "",
+  },
+];
+
+/** @param {string} url */
+function normalizeBaseUrl(url) {
+  return String(url || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+/** @param {string} baseUrl */
+function assertSafeBaseUrlClient(baseUrl) {
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("Base URL must be a valid http(s) URL.");
+  }
+  if (parsed.protocol === "https:") return;
+  const host = parsed.hostname;
+  if (
+    parsed.protocol === "http:" &&
+    (host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "::1")
+  ) {
+    return;
+  }
+  throw new Error(
+    "Base URL must use https (http is only allowed for localhost).",
+  );
+}
+
+/** @param {string} baseUrl */
+function isVercelGateway(baseUrl) {
+  try {
+    return new URL(baseUrl).hostname === VERCEL_GATEWAY_HOST;
+  } catch {
+    return String(baseUrl || "").includes(VERCEL_GATEWAY_HOST);
+  }
+}
+
+/** @param {string} baseUrl */
+function matchProviderPreset(baseUrl) {
+  const normalized = normalizeBaseUrl(baseUrl || DEFAULT_AI_BASE_URL);
+  const hit = AI_PROVIDER_PRESETS.find(
+    (p) => p.baseUrl && normalizeBaseUrl(p.baseUrl) === normalized,
+  );
+  return hit?.id || "custom";
+}
+
+/** @param {string} [providerId] */
+function getProviderPreset(providerId) {
+  return (
+    AI_PROVIDER_PRESETS.find((p) => p.id === providerId) ||
+    AI_PROVIDER_PRESETS.find((p) => p.id === "custom")
+  );
+}
+
+/** Resolve the base URL currently selected (preset or custom field). */
+function currentAiBaseUrl() {
+  const provider = /** @type {HTMLSelectElement | null} */ (
+    document.getElementById("ai-provider")
+  );
+  const preset = getProviderPreset(provider?.value);
+  if (preset?.baseUrl) return preset.baseUrl;
+  const base = /** @type {HTMLInputElement | null} */ (
+    document.getElementById("ai-base-url")
+  );
+  return normalizeBaseUrl(base?.value) || DEFAULT_AI_BASE_URL;
+}
+
+/**
+ * @param {{ fillModel?: boolean }} [opts]
+ * When fillModel is true (user changed provider), replace the model with the preset default.
+ */
+function applyProviderPreset(opts = {}) {
+  const provider = /** @type {HTMLSelectElement | null} */ (
+    document.getElementById("ai-provider")
+  );
+  const baseField = document.getElementById("ai-base-url-field");
+  const base = /** @type {HTMLInputElement | null} */ (
+    document.getElementById("ai-base-url")
+  );
+  const model = /** @type {HTMLInputElement | null} */ (
+    document.getElementById("ai-model")
+  );
+  const hint = document.getElementById("ai-provider-hint");
+  const preset = getProviderPreset(provider?.value);
+  const isCustom = !preset?.baseUrl;
+
+  if (baseField) baseField.hidden = !isCustom;
+  if (base && preset?.baseUrl) base.value = preset.baseUrl;
+  if (model) {
+    model.placeholder = preset?.model || "model-id";
+    if (opts.fillModel && preset?.model) model.value = preset.model;
+  }
+  if (hint) {
+    hint.textContent = isCustom
+      ? "Paste any OpenAI Chat Completions–compatible base URL (…/v1)."
+      : preset?.keyHint ||
+        `Uses ${preset?.baseUrl}. Change the model id if your account uses a different one.`;
+  }
+  syncZdrVisibility();
+}
+
+/** Show ZDR only when Base URL is the Vercel gateway (other providers ignore it). */
+function syncZdrVisibility() {
+  const row = document.getElementById("ai-zdr-row");
+  if (!row) return;
+  row.hidden = !isVercelGateway(currentAiBaseUrl());
+}
+
 async function refreshAiSettings() {
   const settings = await window.catchup.getAiSettings();
   const keyHint = document.getElementById("ai-key-hint");
   if (keyHint) {
     keyHint.textContent = settings.apiKeySet
       ? "✓ API key is saved on this Mac."
-      : "No key saved yet — create one in the Vercel AI Gateway dashboard.";
+      : "No key saved yet — paste a key from your provider.";
     keyHint.classList.toggle("is-good", Boolean(settings.apiKeySet));
   }
   const keyInput = /** @type {HTMLInputElement | null} */ (
@@ -1369,12 +1731,17 @@ async function refreshAiSettings() {
     keyInput.value = "";
     keyInput.placeholder = settings.apiKeySet
       ? "•••••••• saved — paste a new key to replace"
-      : "Paste your Gateway API key";
+      : "Paste your API key";
   }
+  const baseUrl = settings.baseUrl || DEFAULT_AI_BASE_URL;
   const base = /** @type {HTMLInputElement | null} */ (
     document.getElementById("ai-base-url")
   );
-  if (base) base.value = settings.baseUrl || "https://ai-gateway.vercel.sh/v1";
+  if (base) base.value = baseUrl;
+  const provider = /** @type {HTMLSelectElement | null} */ (
+    document.getElementById("ai-provider")
+  );
+  if (provider) provider.value = matchProviderPreset(baseUrl);
   const model = /** @type {HTMLInputElement | null} */ (
     document.getElementById("ai-model")
   );
@@ -1387,6 +1754,7 @@ async function refreshAiSettings() {
     document.getElementById("ai-system-prompt")
   );
   if (prompt) prompt.value = settings.systemPrompt || "";
+  applyProviderPreset({ fillModel: false });
   setAiDirty(false);
 }
 
@@ -1405,10 +1773,30 @@ async function saveAiSettings() {
   const apiKey =
     /** @type {HTMLInputElement | null} */ (document.getElementById("ai-api-key"))
       ?.value || "";
-  const baseUrl =
-    /** @type {HTMLInputElement | null} */ (
-      document.getElementById("ai-base-url")
-    )?.value || "";
+  const provider = /** @type {HTMLSelectElement | null} */ (
+    document.getElementById("ai-provider")
+  );
+  const preset = getProviderPreset(provider?.value);
+  let baseUrl = currentAiBaseUrl();
+  if (!preset?.baseUrl) {
+    const raw =
+      /** @type {HTMLInputElement | null} */ (
+        document.getElementById("ai-base-url")
+      )?.value || "";
+    baseUrl = normalizeBaseUrl(raw);
+    if (!baseUrl) {
+      setStatus(status, "Enter a custom base URL, or pick a provider preset.", {
+        tone: "error",
+      });
+      return;
+    }
+  }
+  try {
+    assertSafeBaseUrlClient(baseUrl);
+  } catch (error) {
+    setErrorStatus(status, error);
+    return;
+  }
   const model =
     /** @type {HTMLInputElement | null} */ (document.getElementById("ai-model"))
       ?.value || "";
@@ -1436,6 +1824,70 @@ async function saveAiSettings() {
     await window.catchup.setAiSettings(patch);
     await refreshAiSettings();
     setStatus(status, "Settings saved.");
+  } catch (error) {
+    setErrorStatus(status, error);
+  } finally {
+    setBusy(button, null);
+  }
+}
+
+async function testAiConnection() {
+  const status = document.getElementById("ai-test-status");
+  const button = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById("test-ai-settings")
+  );
+  const apiKey =
+    /** @type {HTMLInputElement | null} */ (document.getElementById("ai-api-key"))
+      ?.value || "";
+  const provider = /** @type {HTMLSelectElement | null} */ (
+    document.getElementById("ai-provider")
+  );
+  const preset = getProviderPreset(provider?.value);
+  let baseUrl = currentAiBaseUrl();
+  if (!preset?.baseUrl) {
+    baseUrl = normalizeBaseUrl(
+      /** @type {HTMLInputElement | null} */ (
+        document.getElementById("ai-base-url")
+      )?.value || "",
+    );
+    if (!baseUrl) {
+      setStatus(status, "Enter a custom base URL, or pick a provider preset.", {
+        tone: "error",
+      });
+      return;
+    }
+  }
+  try {
+    assertSafeBaseUrlClient(baseUrl);
+  } catch (error) {
+    setErrorStatus(status, error);
+    return;
+  }
+  const model =
+    /** @type {HTMLInputElement | null} */ (document.getElementById("ai-model"))
+      ?.value || "";
+  if (!model.trim()) {
+    setStatus(status, "Enter a model id before testing.", { tone: "error" });
+    return;
+  }
+  const zeroDataRetention = /** @type {HTMLInputElement | null} */ (
+    document.getElementById("ai-zdr")
+  )?.checked;
+
+  setBusy(button, "Testing…");
+  setStatus(status, "Sending a tiny ping…", { tone: "pending" });
+  try {
+    const result = await window.catchup.testAiConnection({
+      apiKey: apiKey.trim(),
+      baseUrl,
+      model: model.trim(),
+      zeroDataRetention: Boolean(zeroDataRetention),
+    });
+    const seconds = (result.latencyMs / 1000).toFixed(1);
+    setStatus(
+      status,
+      `✓ Connected · ${result.model} · ${seconds}s`,
+    );
   } catch (error) {
     setErrorStatus(status, error);
   } finally {
@@ -1519,13 +1971,38 @@ async function init() {
     .getElementById("summary-run")
     ?.addEventListener("click", () => void runSummaryNow());
   document
+    .getElementById("summary-run-older")
+    ?.addEventListener("click", () =>
+      void runSummaryNow({ forceLookback: true }),
+    );
+  document
+    .getElementById("summary-sync")
+    ?.addEventListener("click", () => void syncActiveChatMessages());
+  document
     .getElementById("save-ai-settings")
     ?.addEventListener("click", () => void saveAiSettings());
-  for (const id of ["ai-api-key", "ai-base-url", "ai-model", "ai-zdr", "ai-system-prompt"]) {
+  document
+    .getElementById("test-ai-settings")
+    ?.addEventListener("click", () => void testAiConnection());
+  for (const id of [
+    "ai-api-key",
+    "ai-provider",
+    "ai-base-url",
+    "ai-model",
+    "ai-zdr",
+    "ai-system-prompt",
+  ]) {
     const el = document.getElementById(id);
     el?.addEventListener("input", () => setAiDirty(true));
     el?.addEventListener("change", () => setAiDirty(true));
   }
+  document.getElementById("ai-provider")?.addEventListener("change", () => {
+    applyProviderPreset({ fillModel: true });
+    setAiDirty(true);
+  });
+  document.getElementById("ai-base-url")?.addEventListener("input", () => {
+    syncZdrVisibility();
+  });
   for (const id of ["ai-api-key", "ai-base-url", "ai-model"]) {
     document.getElementById(id)?.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
