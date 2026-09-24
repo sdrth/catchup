@@ -9,9 +9,8 @@ const ICONS = {
   summaries: {
     type: "svg",
     paths: [
-      "M6 7h12",
-      "M6 12h12",
-      "M6 17h8",
+      "M12 3.5l7 2.8v5.2c0 4.3-2.9 7.9-7 9-4.1-1.1-7-4.7-7-9V6.3l7-2.8z",
+      "M9 12.2l2.1 2.1 4-4.1",
     ],
     stroke: true,
   },

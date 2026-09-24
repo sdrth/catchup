@@ -395,7 +395,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     show: false,
-    backgroundColor: "#0c0f14",
+    backgroundColor: "#0c1317",
     title: APP_NAME,
     icon: fs.existsSync(APP_ICON_PNG) ? APP_ICON_PNG : undefined,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
