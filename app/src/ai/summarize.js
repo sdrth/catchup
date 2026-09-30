@@ -237,6 +237,8 @@ async function tickSummaries() {
   const settings = getAiSettings();
   if (!getAiGatewayApiKey()) return [];
 
+  const enabled = listEnabledSummaryPrefs();
+  if (enabled.length === 0) return [];
   try {
     assertSafeBaseUrl(settings.baseUrl);
   } catch (error) {
@@ -245,13 +247,13 @@ async function tickSummaries() {
     return [
       {
         settingsError: true,
-        error: `AI Gateway Base URL in Settings is no longer valid (${error.message}) Update it in Settings to resume summaries.`,
+        error: `AI Gateway Base URL in Settings is no longer valid. ${error.message} Update it in Settings to resume summaries.`,
       },
     ];
   }
 
   const results = [];
-  for (const prefs of listEnabledSummaryPrefs()) {
+  for (const prefs of enabled) {
     if (!isDue(prefs, false)) continue;
     try {
       const result = await runSummaryForChat(prefs.chatId, {

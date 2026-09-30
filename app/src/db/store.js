@@ -1,6 +1,6 @@
 const Database = require("better-sqlite3");
 const { ensureDbDir, getDbPath, redactHomePath } = require("./paths");
-const { assertSafeBaseUrl } = require("../ai/gateway");
+const { assertSafeBaseUrl, sameOrigin } = require("../ai/gateway");
 
 /** @type {import("better-sqlite3").Database | null} */
 let db = null;
@@ -810,16 +810,25 @@ function getAiSettings() {
  * }} patch
  */
 function setAiSettings(patch) {
-  if (patch.apiKey != null) {
-    const key = String(patch.apiKey).trim();
-    if (key) setMeta("ai_gateway_api_key", key);
-  }
+  // Validate before writing anything so a rejected Base URL can't leave the
+  // rest of the patch half-saved.
+  let resolvedBaseUrl = null;
   if (patch.baseUrl != null) {
     const url = String(patch.baseUrl).trim().replace(/\/$/, "");
-    const resolved = url || DEFAULT_AI_GATEWAY_BASE_URL;
-    assertSafeBaseUrl(resolved);
-    setMeta("ai_gateway_base_url", resolved);
+    resolvedBaseUrl = url || DEFAULT_AI_GATEWAY_BASE_URL;
+    assertSafeBaseUrl(resolvedBaseUrl);
   }
+  const newKey = patch.apiKey != null ? String(patch.apiKey).trim() : "";
+  if (resolvedBaseUrl != null) {
+    // A stored key belongs to the host it was entered for — don't carry it
+    // over to a different provider the user just switched to.
+    const previous = getMeta("ai_gateway_base_url") || DEFAULT_AI_GATEWAY_BASE_URL;
+    if (!newKey && !sameOrigin(previous, resolvedBaseUrl)) {
+      setMeta("ai_gateway_api_key", "");
+    }
+    setMeta("ai_gateway_base_url", resolvedBaseUrl);
+  }
+  if (newKey) setMeta("ai_gateway_api_key", newKey);
   if (patch.model != null) {
     const model = String(patch.model).trim();
     if (model) setMeta("ai_gateway_model", model);

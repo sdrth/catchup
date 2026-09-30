@@ -45,7 +45,7 @@ const {
 } = require("./db/store");
 const { attachWhatsAppCapture } = require("./whatsapp/capture");
 const { runSummaryForChat, tickSummaries, getLookbackState } = require("./ai/summarize");
-const { testGatewayConnection } = require("./ai/gateway");
+const { testGatewayConnection, sameOrigin } = require("./ai/gateway");
 
 const SIDEBAR_WIDTH = 84;
 const APP_NAME = "Catchup";
@@ -688,10 +688,13 @@ ipcMain.handle("ai:setSettings", (_event, patch) => {
 ipcMain.handle("ai:testConnection", async (_event, draft) => {
   const settings = getAiSettings();
   const patch = draft && typeof draft === "object" ? draft : {};
-  const apiKey =
-    String(patch.apiKey || "").trim() || getAiGatewayApiKey() || "";
   const baseUrl =
     String(patch.baseUrl || "").trim() || settings.baseUrl || "";
+  // The stored key only goes to the host it was saved for; testing a
+  // different provider needs its own key typed in.
+  const apiKey =
+    String(patch.apiKey || "").trim() ||
+    (sameOrigin(baseUrl, settings.baseUrl) ? getAiGatewayApiKey() : "");
   const model = String(patch.model || "").trim() || settings.model || "";
   const zeroDataRetention =
     patch.zeroDataRetention != null

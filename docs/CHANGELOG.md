@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Settings: saved key stays with its provider.** Switching Base URL to a different host without typing a new key clears the saved key, and **Test connection** only falls back to the saved key for the saved host, so a key is never sent to a provider it wasn't entered for. A rejected Base URL no longer leaves the rest of the settings patch half-saved. The summary tick only reports an invalid Base URL when chats have summaries enabled.
 - **Access: Summarize older messages.** When the usual 12-hour catch-up window is empty but older stored messages exist, Access explains that and offers **Summarize older messages** to bypass the lookback once. Scheduled runs still stay inside 12 hours. If nothing is stored yet, Access offers **Sync messages**; **Summarize now** also tries one force-sync first.
 - **Sync: no cooldown for already-loaded data.** Force sync used to be capped at 10/hour even though it only reads what WhatsApp Web already has in memory. That cap is gone; only the deep earlier-history fetch (which asks WhatsApp for more) stays rate-limited, and when it's throttled sync still does a shallow read.
 - **Settings: Test connection.** A **Test connection** button under the model field sends a tiny Chat Completions ping with the form’s key (or the saved key), provider/base URL, and model, then shows success with latency or the API error inline. Non-loopback `http://` base URLs are rejected so keys are never sent in cleartext.

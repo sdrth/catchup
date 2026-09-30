@@ -26,6 +26,18 @@ function isLoopbackBaseUrl(baseUrl) {
 }
 
 /**
+ * @param {string} a
+ * @param {string} b
+ */
+function sameOrigin(a, b) {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Reject cleartext http except loopback so API keys never leave over plain HTTP.
  * @param {string} baseUrl
  */
@@ -173,4 +185,5 @@ module.exports = {
   DEFAULT_BASE_URL,
   isLoopbackBaseUrl,
   assertSafeBaseUrl,
+  sameOrigin,
 };
