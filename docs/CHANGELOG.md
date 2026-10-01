@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Access: fix allowlist FK failures.** Enabling Access / summaries for a chat that was not yet in the local catalog no longer fails with `FOREIGN KEY constraint failed` — the chat row is ensured before allowlist / summary_prefs writes.
+- **Sync: preserve message timestamps.** Re-upserts keep the earlier timestamp so DOM rescrapes cannot clobber real Store times (and scramble summary watermarks).
+- **DOM fallback: chronological timestamps.** Synthetic scrape times now increase oldest→newest; wall-clock is parsed from `data-pre-plain-text` when present.
+- **Gateway: reject cleartext non-loopback Base URLs.** API keys are no longer sent over plain `http://` to remote hosts. Vercel ZDR options are attached only when the Base URL hostname is actually `ai-gateway.vercel.sh`.
 - Add MIT [LICENSE](../LICENSE) (as-is, no warranty / no liability).
 - Add [SECURITY.md](../SECURITY.md) (local store, zero telemetry / no Catchup backend, MCP trust model, reporting).
 - Bump Electron `37.2.6` → `44.3.0`.

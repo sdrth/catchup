@@ -1,4 +1,5 @@
 const Database = require("better-sqlite3");
+const { assertSafeBaseUrl } = require("../ai/gateway");
 const { ensureDbDir, getDbPath, redactHomePath } = require("./paths");
 
 /** @type {import("better-sqlite3").Database | null} */
@@ -479,14 +480,21 @@ function upsertMessages(chatId, chatName, kind, messages, phone = null) {
       now,
     );
 
+  // On conflict, keep the earlier timestamp. DOM rescrapes invent near-now
+  // fakes that would otherwise clobber real Store timestamps and scramble
+  // summary watermarks / message order.
   const stmt = database.prepare(`
     INSERT INTO messages (id, chat_id, body, sender_name, from_me, timestamp, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       body = excluded.body,
-      sender_name = excluded.sender_name,
+      sender_name = COALESCE(excluded.sender_name, messages.sender_name),
       from_me = excluded.from_me,
-      timestamp = excluded.timestamp
+      timestamp = CASE
+        WHEN messages.timestamp > 0 AND excluded.timestamp > 0
+          THEN MIN(messages.timestamp, excluded.timestamp)
+        ELSE COALESCE(NULLIF(excluded.timestamp, 0), messages.timestamp)
+      END
   `);
 
   const insertMany = database.transaction((rows) => {
@@ -679,12 +687,16 @@ function ensureAllowlisted(chatId) {
 
 /**
  * Insert/update one chat row without consolidate/prune (safe for Sync toggle).
+ * Always creates a row when missing so allowlist / summary_prefs FK inserts
+ * cannot fail for a chat the Access panel just offered.
  * @param {{ id: string, name?: string, kind?: string, phone?: string | null }} chat
  */
 function ensureChatRow(chat) {
   if (!chat?.id) return;
-  const name = cleanChatName(chat.name);
-  if (!name) return;
+  const name =
+    cleanChatName(chat.name) ||
+    cleanChatName(String(chat.id)) ||
+    String(chat.id);
   const kind = normalizeKind(chat.kind, chat.id);
   const phone =
     normalizePhone(chat.phone, kind) || phoneFromChatId(chat.id, kind);
@@ -718,15 +730,14 @@ function setChatSynced(chatId, synced, meta) {
   if (!chatId) throw new Error("chatId required");
 
   if (synced) {
+    // chats row must exist before allowlist (FK).
+    ensureChatRow({
+      id: chatId,
+      name: meta?.name || chatId,
+      kind: meta?.kind || "contact",
+      phone: meta?.phone ?? null,
+    });
     ensureAllowlisted(chatId);
-    if (meta?.name) {
-      ensureChatRow({
-        id: chatId,
-        name: meta.name,
-        kind: meta.kind || "contact",
-        phone: meta.phone ?? null,
-      });
-    }
   } else {
     const prefs = getDb()
       .prepare(`SELECT enabled FROM summary_prefs WHERE chat_id = ?`)
@@ -762,6 +773,13 @@ function saveChatSidebar(chatId, opts) {
   if (!chatId) throw new Error("chatId required");
   const summarizeOn = Boolean(opts?.summary?.enabled);
   const synced = Boolean(opts?.synced) || summarizeOn;
+  // Ensure the catalog row first — summary_prefs and allowlist both FK to chats.
+  ensureChatRow({
+    id: chatId,
+    name: opts?.meta?.name || chatId,
+    kind: opts?.meta?.kind || "contact",
+    phone: opts?.meta?.phone ?? null,
+  });
   setSummaryPrefs(chatId, { ...(opts?.summary || {}), enabled: summarizeOn });
   setChatSynced(chatId, synced, opts?.meta);
   return getChatById(chatId);
@@ -813,7 +831,9 @@ function setAiSettings(patch) {
   }
   if (patch.baseUrl != null) {
     const url = String(patch.baseUrl).trim().replace(/\/$/, "");
-    setMeta("ai_gateway_base_url", url || DEFAULT_AI_GATEWAY_BASE_URL);
+    const resolved = url || DEFAULT_AI_GATEWAY_BASE_URL;
+    assertSafeBaseUrl(resolved);
+    setMeta("ai_gateway_base_url", resolved);
   }
   if (patch.model != null) {
     const model = String(patch.model).trim();
@@ -866,6 +886,13 @@ function clearSummariesForChat(chatId) {
 function setSummaryPrefs(chatId, patch) {
   if (!chatId) throw new Error("chatId required");
   const database = getDb();
+  // summary_prefs.chat_id FK → chats.id; create a stub row if missing.
+  const existingChat = database
+    .prepare(`SELECT id FROM chats WHERE id = ? LIMIT 1`)
+    .get(chatId);
+  if (!existingChat) {
+    ensureChatRow({ id: chatId, name: chatId, kind: "contact" });
+  }
   const existing = database
     .prepare(`SELECT * FROM summary_prefs WHERE chat_id = ?`)
     .get(chatId);

@@ -569,6 +569,47 @@
   }
 
   /**
+   * Parse WhatsApp's data-pre-plain-text prefix, e.g.
+   * "[10:30 AM, 1/15/2026] Alice: " or "[22:15, 15/01/2026] ".
+   * @param {string} pre
+   * @returns {number | null} ms epoch, or null if unparseable
+   */
+  function parsePrePlainTimestamp(pre) {
+    const raw = String(pre || "");
+    const match = raw.match(
+      /^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?(?:,\s*|\s+)(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})]/i,
+    );
+    if (!match) return null;
+    let hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const seconds = Number(match[3] || 0);
+    const ampm = (match[4] || "").toUpperCase();
+    const a = Number(match[5]);
+    const b = Number(match[6]);
+    let year = Number(match[7]);
+    if (year < 100) year += 2000;
+    if (ampm === "PM" && hours < 12) hours += 12;
+    if (ampm === "AM" && hours === 12) hours = 0;
+    // Prefer M/D/Y when the first number is > 12 (must be day-first), else
+    // assume locale-typical M/D/Y for WhatsApp Web's English UI default.
+    let month;
+    let day;
+    if (a > 12) {
+      day = a;
+      month = b;
+    } else if (b > 12) {
+      month = a;
+      day = b;
+    } else {
+      month = a;
+      day = b;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const ms = new Date(year, month - 1, day, hours, minutes, seconds).getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  /**
    * Visible messages in the open conversation pane (cheap vs Store msgs).
    * @param {number} limit
    * @param {string} [fallbackChatName]
@@ -603,7 +644,9 @@
     const seen = new Set();
     const messages = [];
     const slice = nodes.length > limit ? nodes.slice(nodes.length - limit) : nodes;
-    for (const node of slice) {
+    const baseTime = Date.now();
+    for (let index = 0; index < slice.length; index += 1) {
+      const node = slice[index];
       const copyable =
         node.querySelector('[data-testid="msg-text"]') ||
         node.querySelector(".copyable-text") ||
@@ -643,12 +686,19 @@
         Boolean(node.querySelector('[data-icon="msg-dblcheck"]')) ||
         Boolean(node.querySelector('[data-testid="msg-dblcheck"]'));
 
+      // Slice is oldest→newest among visible nodes. Prefer parsed wall-clock
+      // from data-pre-plain-text; otherwise assign ascending synthetic times
+      // (previously these decreased with push order and inverted chronology).
+      const parsedTs = parsePrePlainTimestamp(pre);
+      const timestamp =
+        parsedTs || baseTime - (slice.length - index) * 1000;
+
       messages.push({
         id,
         body,
         senderName: looksOutgoing ? "You" : chatNameText,
         fromMe: looksOutgoing,
-        timestamp: Date.now() - (messages.length + 1) * 1000,
+        timestamp,
       });
     }
     return messages;
