@@ -787,6 +787,8 @@ function saveChatSidebar(chatId, opts) {
 
 const DEFAULT_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 const DEFAULT_AI_GATEWAY_MODEL = "anthropic/claude-sonnet-4.5";
+// Keep these in sync with DEFAULT_BASE_URL in app/src/ai/gateway.js and the
+// Vercel preset in app/src/renderer/renderer.js.
 
 const DEFAULT_SYSTEM_PROMPT = `You are Catchup's chat summarizer. Summarize WhatsApp conversations clearly and factually.
 
@@ -1183,6 +1185,23 @@ function countMessagesSince(chatId, afterTs) {
     )
     .get(chatId, Number(afterTs) || 0);
   return Number(row?.n) || 0;
+}
+
+/**
+ * @param {string} chatId
+ * @returns {number} ms epoch, or 0 if none
+ */
+function getLatestMessageTimestamp(chatId) {
+  if (!chatId) return 0;
+  const row = getDb()
+    .prepare(
+      `
+      SELECT MAX(timestamp) AS ts FROM messages
+      WHERE chat_id = ?
+    `,
+    )
+    .get(chatId);
+  return Number(row?.ts) || 0;
 }
 
 /**
@@ -1692,6 +1711,7 @@ module.exports = {
   insertSummary,
   getMessagesSince,
   countMessagesSince,
+  getLatestMessageTimestamp,
   listEnabledSummaryPrefs,
   setMeta,
   getDrawerWidth,

@@ -2,7 +2,7 @@
 
 Catchup helps your AI tools read your WhatsApp — only the chats you approve.
 
-WhatsApp stays in Catchup as usual. Approved chats sync to a local SQLite database on your Mac, agents read them over MCP (read-only), and optional catch-up summaries can run through your Vercel AI Gateway key.
+WhatsApp stays in Catchup as usual. Approved chats sync to a local SQLite database on your Mac, agents read them over MCP (read-only), and optional catch-up summaries can run through an OpenAI-compatible gateway (Vercel AI Gateway by default).
 
 **v1.1.0**
 

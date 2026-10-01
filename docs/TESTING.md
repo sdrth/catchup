@@ -18,8 +18,8 @@ Fully quit (Cmd+Q) after code changes so inject and UI reload.
 ## Summaries
 
 1. **Settings** — Gateway key, ZDR on, save.
-2. **Access** — enable catch-up summaries, **Save schedule**, **Summarize now**.
-3. Disable Access or summaries → that chat’s local notes/messages clear.
+2. **Access** — enable catch-up summaries, edit the schedule (autosaves), **Summarize now**.
+3. Disable Access or summaries → a confirm lists what will be deleted; confirm → that chat’s local notes/messages clear. **Cancel** / Esc leaves it on.
 
 ## Checks
 
