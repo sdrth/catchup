@@ -10,7 +10,8 @@
     "dev": "electron .",
     "postinstall": "node scripts/fix-electron-path.js",
     "package": "node scripts/package.js",
-    "mcp": "node src/mcp/server.mjs"
+    "mcp": "node src/mcp/server.mjs",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=22.12.0"

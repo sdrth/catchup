@@ -9,7 +9,7 @@ Catchup does **not** phone home. There is **no Catchup cloud service**, account,
 ## What stays on your machine
 
 - Approved chat messages and metadata live in a local SQLite database (under Application Support / equivalent).
-- The optional Vercel AI Gateway API key is stored in that database as plaintext metadata — not in the OS keychain.
+- The optional gateway API key is stored in that database. When Electron `safeStorage` encryption is available (typical on macOS/Windows app builds), the key is encrypted at rest (`enc:v1:…`); otherwise it may still be plaintext. It is not stored in the OS keychain as a named item.
 - Gateway Base URL must be `https` (or `http` only for localhost / loopback). Catchup rejects cleartext remote endpoints so the key is not sent over plain HTTP.
 - The MCP server is **stdio-only**. Any local process that can run the configured MCP command can read allowlisted chats. There is no network auth layer.
 

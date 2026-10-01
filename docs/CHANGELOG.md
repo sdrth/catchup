@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Access: tighten allowlist identity matching.** Message sync no longer soft-matches an open chat to an allowlisted chat of a different kind that happens to share a cleaned title (contact vs group). Name match requires the same kind; phone match remains as a fallback.
+- **Security: encrypt Gateway API key at rest.** When Electron `safeStorage` is available, the API key is stored encrypted in SQLite (`enc:v1:…`) instead of plaintext. Existing plaintext keys are migrated on first read inside the app. Plain Node (MCP) never needs the key.
+- **Tests: automated store/gateway suite.** `cd app && pnpm test` runs Node’s built-in test runner against FK Access saves, timestamp preservation, identity matching, and Gateway URL safety.
 - **Access: fix allowlist FK failures.** Enabling Access / summaries for a chat that was not yet in the local catalog no longer fails with `FOREIGN KEY constraint failed` — the chat row is ensured before allowlist / summary_prefs writes.
 - **Sync: preserve message timestamps.** Re-upserts keep the earlier timestamp so DOM rescrapes cannot clobber real Store times (and scramble summary watermarks).
 - **DOM fallback: chronological timestamps.** Synthetic scrape times now increase oldest→newest; wall-clock is parsed from `data-pre-plain-text` when present.

@@ -7,6 +7,7 @@ Catchup is meant to be **cloned and run from source**. It does not ship maintain
 ```bash
 cd app
 pnpm install
+pnpm test
 pnpm start
 ```
 

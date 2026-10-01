@@ -635,11 +635,11 @@ function resolveCatalogChat(chat) {
   const rows = getDb()
     .prepare(`SELECT id, name, kind, phone FROM chats`)
     .all();
-  /** @type {typeof rows[number] | null} */
-  let soft = null;
   for (const row of rows) {
     const rowName = cleanChatName(row.name).toLowerCase();
     if (!rowName || rowName !== needle) continue;
+    // Same cleaned title + same kind only — never cross-kind soft match
+    // (e.g. a contact named like a group).
     if (normalizeKind(row.kind, row.id) === kind) {
       return {
         id: row.id,
@@ -648,15 +648,6 @@ function resolveCatalogChat(chat) {
         phone: phone || normalizePhone(row.phone, kind),
       };
     }
-    soft = soft || row;
-  }
-  if (soft) {
-    return {
-      id: soft.id,
-      name: cleaned || cleanChatName(soft.name) || soft.id,
-      kind: normalizeKind(soft.kind, soft.id),
-      phone: phone || normalizePhone(soft.phone, kind),
-    };
   }
 
   if (!chat.id) return null;
@@ -817,6 +808,68 @@ function getAiSettings() {
   };
 }
 
+const SECRET_ENC_PREFIX = "enc:v1:";
+
+/**
+ * Electron safeStorage when running inside the app; null in plain Node (MCP/tests).
+ * @returns {null | { encryptString: (s: string) => Buffer, decryptString: (b: Buffer) => string }}
+ */
+function getSafeStorage() {
+  // Never require("electron") outside the Electron runtime — that can spawn
+  // / download the Electron binary from plain Node (MCP, pnpm test).
+  if (!process.versions.electron) return null;
+  try {
+    const { safeStorage } = require("electron");
+    if (
+      safeStorage &&
+      typeof safeStorage.isEncryptionAvailable === "function" &&
+      safeStorage.isEncryptionAvailable()
+    ) {
+      return safeStorage;
+    }
+  } catch {
+    // unavailable
+  }
+  return null;
+}
+
+/**
+ * @param {string} plain
+ * @returns {string} value to persist in meta
+ */
+function sealSecret(plain) {
+  const value = String(plain || "");
+  if (!value) return "";
+  const ss = getSafeStorage();
+  if (!ss) return value;
+  try {
+    return SECRET_ENC_PREFIX + ss.encryptString(value).toString("base64");
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * @param {string | null} stored
+ * @returns {string}
+ */
+function openSecret(stored) {
+  const value = String(stored || "");
+  if (!value) return "";
+  if (!value.startsWith(SECRET_ENC_PREFIX)) return value;
+  const ss = getSafeStorage();
+  if (!ss) {
+    throw new Error(
+      "Encrypted gateway API key can only be read inside the Catchup app.",
+    );
+  }
+  try {
+    return ss.decryptString(Buffer.from(value.slice(SECRET_ENC_PREFIX.length), "base64"));
+  } catch {
+    throw new Error("Could not decrypt the saved gateway API key.");
+  }
+}
+
 /**
  * @param {{
  *   apiKey?: string | null,
@@ -829,7 +882,7 @@ function getAiSettings() {
 function setAiSettings(patch) {
   if (patch.apiKey != null) {
     const key = String(patch.apiKey).trim();
-    if (key) setMeta("ai_gateway_api_key", key);
+    if (key) setMeta("ai_gateway_api_key", sealSecret(key));
   }
   if (patch.baseUrl != null) {
     const url = String(patch.baseUrl).trim().replace(/\/$/, "");
@@ -851,7 +904,18 @@ function setAiSettings(patch) {
 }
 
 function getAiGatewayApiKey() {
-  return getMeta("ai_gateway_api_key") || "";
+  const stored = getMeta("ai_gateway_api_key");
+  if (!stored) return "";
+  const plain = openSecret(stored);
+  // Migrate plaintext → encrypted when safeStorage becomes available.
+  if (plain && !String(stored).startsWith(SECRET_ENC_PREFIX) && getSafeStorage()) {
+    try {
+      setMeta("ai_gateway_api_key", sealSecret(plain));
+    } catch {
+      // leave plaintext if re-seal fails
+    }
+  }
+  return plain;
 }
 
 /**
@@ -1284,7 +1348,9 @@ function isChatSynced(chatId) {
 
 /**
  * Map an incoming chat to an allowlisted row. DOM hash IDs churn when titles
- * change case / unread prefixes, so fall back to cleaned name (kind soft).
+ * change case / unread prefixes, so fall back to cleaned name + kind, then
+ * phone. Never soft-match across kinds by title alone (that mis-routes
+ * messages when a contact and group share a cleaned name).
  * @param {{ id?: string, name?: string, kind?: string, phone?: string | null } | null | undefined} chat
  * @returns {{ id: string, name: string, kind: string, phone: string | null } | null}
  */
@@ -1317,48 +1383,35 @@ function resolveSyncedChat(chat) {
   if (rows.length === 0) return null;
 
   const needle = (cleaned || "").toLowerCase();
-  /** @type {typeof rows[number] | null} */
-  let softName = null;
 
   if (needle) {
     for (const row of rows) {
       const rowName = cleanChatName(row.name).toLowerCase();
       if (!rowName || rowName !== needle) continue;
-      if (normalizeKind(row.kind, row.id) === kind) {
-        return {
-          id: row.id,
-          name: cleaned,
-          kind,
-          phone: phone || normalizePhone(row.phone, kind),
-        };
-      }
-      softName = softName || row;
+      if (normalizeKind(row.kind, row.id) !== kind) continue;
+      return {
+        id: row.id,
+        name: cleaned,
+        kind,
+        phone: phone || normalizePhone(row.phone, kind),
+      };
     }
   }
 
   if (phone) {
     for (const row of rows) {
+      const rowKind = normalizeKind(row.kind, row.id);
       const rowPhone =
-        normalizePhone(row.phone, normalizeKind(row.kind, row.id)) ||
-        phoneFromChatId(row.id, normalizeKind(row.kind, row.id));
+        normalizePhone(row.phone, rowKind) || phoneFromChatId(row.id, rowKind);
       if (rowPhone && rowPhone === phone) {
         return {
           id: row.id,
           name: cleaned || cleanChatName(row.name) || row.id,
-          kind: normalizeKind(row.kind, row.id),
+          kind: rowKind,
           phone,
         };
       }
     }
-  }
-
-  if (softName) {
-    return {
-      id: softName.id,
-      name: cleaned || cleanChatName(softName.name) || softName.id,
-      kind: normalizeKind(softName.kind, softName.id),
-      phone: phone || normalizePhone(softName.phone, kind),
-    };
   }
 
   return null;
