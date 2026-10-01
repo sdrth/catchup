@@ -25,7 +25,6 @@ const {
   resolveSyncedChat,
   getAllowlistPolicy,
   consumeRateLimit,
-  checkRateLimit,
   getStats,
   getRecentMessages,
   getDbPath,
@@ -184,14 +183,11 @@ function requestWhatsAppSnapshot() {
     return;
   }
 
-  const deepGate = checkRateLimit("deep_load", {
+  const deepGate = consumeRateLimit("deep_load", {
     max: 6,
     windowMs: 60 * 60 * 1000,
   });
   const allowDeep = deepGate.allowed;
-  if (allowDeep) {
-    consumeRateLimit("deep_load", { max: 6, windowMs: 60 * 60 * 1000 });
-  }
 
   pushCapturePolicy();
   if (whatsappCapture?.forceSnapshot) {
@@ -474,6 +470,13 @@ app.whenReady().then(async () => {
       tickSummaries()
         .then((results) => {
           if (!results.length || !mainWindow) return;
+          const settingsError = results.find((r) => r.settingsError);
+          if (settingsError?.error) {
+            console.warn(
+              "[catchup] summary tick",
+              redactForLog(settingsError.error),
+            );
+          }
           mainWindow.webContents.send("summaries:updated", {
             results,
             chatIds: results
