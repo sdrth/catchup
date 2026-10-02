@@ -1,5 +1,5 @@
 const Database = require("better-sqlite3");
-const { assertSafeBaseUrl } = require("../ai/gateway");
+const { assertSafeBaseUrl, sameOrigin } = require("../ai/gateway");
 const { ensureDbDir, getDbPath, redactHomePath } = require("./paths");
 
 /** @type {import("better-sqlite3").Database | null} */
@@ -880,16 +880,26 @@ function openSecret(stored) {
  * }} patch
  */
 function setAiSettings(patch) {
-  if (patch.apiKey != null) {
-    const key = String(patch.apiKey).trim();
-    if (key) setMeta("ai_gateway_api_key", sealSecret(key));
-  }
+  // Validate before writing anything so a rejected Base URL can't leave the
+  // rest of the patch half-saved.
+  let resolvedBaseUrl = null;
   if (patch.baseUrl != null) {
     const url = String(patch.baseUrl).trim().replace(/\/$/, "");
-    const resolved = url || DEFAULT_AI_GATEWAY_BASE_URL;
-    assertSafeBaseUrl(resolved);
-    setMeta("ai_gateway_base_url", resolved);
+    resolvedBaseUrl = url || DEFAULT_AI_GATEWAY_BASE_URL;
+    assertSafeBaseUrl(resolvedBaseUrl);
   }
+  const newKey = patch.apiKey != null ? String(patch.apiKey).trim() : "";
+  if (resolvedBaseUrl != null) {
+    // A stored key belongs to the host it was entered for — don't carry it
+    // over to a different provider the user just switched to.
+    const previous =
+      getMeta("ai_gateway_base_url") || DEFAULT_AI_GATEWAY_BASE_URL;
+    if (!newKey && !sameOrigin(previous, resolvedBaseUrl)) {
+      setMeta("ai_gateway_api_key", "");
+    }
+    setMeta("ai_gateway_base_url", resolvedBaseUrl);
+  }
+  if (newKey) setMeta("ai_gateway_api_key", sealSecret(newKey));
   if (patch.model != null) {
     const model = String(patch.model).trim();
     if (model) setMeta("ai_gateway_model", model);
@@ -1444,6 +1454,11 @@ function setAllowlist(chatIds) {
   const apply = database.transaction((selectedIds) => {
     clear.run();
     for (const id of selectedIds) {
+      ensureChatRow({
+        id,
+        name: id,
+        kind: String(id).includes("@g.us") ? "group" : "contact",
+      });
       insert.run(id, now);
     }
     // Drop message bodies for chats no longer selected.
@@ -1478,19 +1493,28 @@ function listAllowedChats() {
 }
 
 /**
- * Compact allowlist payload for the WhatsApp inject (ids + lowercase names).
- * @returns {{ ids: string[], names: string[] }}
+ * Compact allowlist payload for the WhatsApp inject.
+ * `entries` carries cleaned name + kind so inject never treats a contact as
+ * an allowlisted group (or vice versa) that shares a title.
+ * @returns {{ ids: string[], names: string[], entries: Array<{ name: string, kind: string }> }}
  */
 function getAllowlistPolicy() {
   const rows = listAllowedChats();
   const ids = [];
   const names = [];
+  const entries = [];
   for (const row of rows) {
     if (row.id) ids.push(String(row.id));
     const cleaned = cleanChatName(row.name).toLowerCase();
-    if (cleaned) names.push(cleaned);
+    if (cleaned) {
+      names.push(cleaned);
+      entries.push({
+        name: cleaned,
+        kind: normalizeKind(row.kind, row.id),
+      });
+    }
   }
-  return { ids, names };
+  return { ids, names, entries };
 }
 
 const RATE_META_KEY = "wa_rate_limit_v1";

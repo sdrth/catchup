@@ -8,7 +8,7 @@ const {
   listEnabledSummaryPrefs,
   getSummaryPrefs,
 } = require("../db/store");
-const { generateViaGateway, assertSafeBaseUrl } = require("./gateway");
+const { generateViaGateway, assertSafeBaseUrl, isLoopbackBaseUrl } = require("./gateway");
 
 /** @type {Set<string>} */
 const inFlight = new Set();
@@ -140,8 +140,9 @@ async function runSummaryForChat(chatId, opts = {}) {
 
   const settings = opts.settings || getAiSettings();
   const apiKey = getAiGatewayApiKey();
-  if (!apiKey) {
-    throw new Error("Add your AI Gateway API key in Settings.");
+  const loopback = isLoopbackBaseUrl(settings.baseUrl);
+  if (!apiKey && !loopback) {
+    throw new Error("Add your gateway API key in Settings.");
   }
 
   // Bound the catch-up window: go back to the last watermark, but never
@@ -235,8 +236,12 @@ async function runSummaryForChat(chatId, opts = {}) {
 
 async function tickSummaries() {
   const settings = getAiSettings();
-  if (!getAiGatewayApiKey()) return [];
+  const apiKey = getAiGatewayApiKey();
+  const loopback = isLoopbackBaseUrl(settings.baseUrl);
+  if (!apiKey && !loopback) return [];
 
+  const enabled = listEnabledSummaryPrefs();
+  if (enabled.length === 0) return [];
   try {
     assertSafeBaseUrl(settings.baseUrl);
   } catch (error) {
@@ -245,13 +250,13 @@ async function tickSummaries() {
     return [
       {
         settingsError: true,
-        error: `AI Gateway Base URL in Settings is no longer valid (${error.message}) Update it in Settings to resume summaries.`,
+        error: `AI Gateway Base URL in Settings is no longer valid. ${error.message} Update it in Settings to resume summaries.`,
       },
     ];
   }
 
   const results = [];
-  for (const prefs of listEnabledSummaryPrefs()) {
+  for (const prefs of enabled) {
     if (!isDue(prefs, false)) continue;
     try {
       const result = await runSummaryForChat(prefs.chatId, {

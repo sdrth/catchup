@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Sync: deep history only on explicit Sync.** Opening Access / enabling a chat / schedule autosave no longer consumes the deep `loadEarlierMsgs` quota — those paths do a shallow read (or policy-only for schedule saves). Only **Sync messages** / Summarize-now force-sync requests deep history (still ~6/hour, with shallow fallback).
+- **Settings: saved key stays with its provider.** Switching Base URL to a different host without typing a new key clears the saved key, and **Test connection** only falls back to the saved key for the saved host. A rejected Base URL no longer leaves the rest of the settings patch half-saved. Loopback providers (e.g. Ollama) can summarize without a key, matching Test connection.
+- **Access: Sync messages visible without summaries.** The Sync CTA and empty-store hint sit outside the catch-up-summaries panel so allowlisted chats with nothing stored yet can sync while summaries stay off.
+- **Access: inject/UI match same-kind allowlist.** WhatsApp inject policy and Access chat matching require the same kind for title matches, aligning with store `resolveSyncedChat`.
 - **Access: tighten allowlist identity matching.** Message sync no longer soft-matches an open chat to an allowlisted chat of a different kind that happens to share a cleaned title (contact vs group). Name match requires the same kind; phone match remains as a fallback.
 - **Security: encrypt Gateway API key at rest.** When Electron `safeStorage` is available, the API key is stored encrypted in SQLite (`enc:v1:…`) instead of plaintext. Existing plaintext keys are migrated on first read inside the app. Plain Node (MCP) never needs the key.
 - **Tests: automated store/gateway suite.** `cd app && pnpm test` runs Node’s built-in test runner against FK Access saves, timestamp preservation, identity matching, and Gateway URL safety.

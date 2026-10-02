@@ -16,30 +16,49 @@
     path: null,
     /** @type {Set<string>} */
     deepLoaded: new Set(),
-    /** @type {{ ids: Set<string>, names: Set<string> }} */
-    allow: { ids: new Set(), names: new Set() },
+    /** @type {{ ids: Set<string>, entries: Array<{ name: string, kind: string }> }} */
+    allow: { ids: new Set(), entries: [] },
     lastSnapshotAt: 0,
   };
 
   function setPolicy(policy) {
     const ids = Array.isArray(policy?.ids) ? policy.ids : [];
-    const names = Array.isArray(policy?.names) ? policy.names : [];
     STATE.allow.ids = new Set(ids.map(String));
-    STATE.allow.names = new Set(
-      names.map((n) => String(n || "").toLowerCase()).filter(Boolean),
-    );
+    /** @type {Array<{ name: string, kind: string }>} */
+    let entries = Array.isArray(policy?.entries) ? policy.entries : [];
+    // Legacy: names-only policy (no kind) — treat kind as wildcard.
+    if (entries.length === 0 && Array.isArray(policy?.names)) {
+      entries = policy.names.map((n) => ({
+        name: String(n || "").toLowerCase(),
+        kind: "",
+      }));
+    }
+    STATE.allow.entries = entries
+      .map((e) => ({
+        name: String(e?.name || "").toLowerCase(),
+        kind:
+          e?.kind === "group" ? "group" : e?.kind === "contact" ? "contact" : "",
+      }))
+      .filter((e) => e.name);
   }
 
   function hasAllowlist() {
-    return STATE.allow.ids.size > 0 || STATE.allow.names.size > 0;
+    return STATE.allow.ids.size > 0 || STATE.allow.entries.length > 0;
   }
 
   function isAllowedMeta(meta) {
     if (!hasAllowlist()) return false;
     const id = meta?.id ? String(meta.id) : "";
     if (id && STATE.allow.ids.has(id)) return true;
-    const name = String(meta?.name || "").toLowerCase();
-    if (name && STATE.allow.names.has(name)) return true;
+    const name = String(meta?.name || "")
+      .toLowerCase()
+      .trim();
+    if (!name) return false;
+    const kind = meta?.kind === "group" ? "group" : "contact";
+    for (const entry of STATE.allow.entries) {
+      if (entry.name !== name) continue;
+      if (!entry.kind || entry.kind === kind) return true;
+    }
     return false;
   }
 

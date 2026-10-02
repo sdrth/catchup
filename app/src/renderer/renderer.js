@@ -625,13 +625,16 @@ function matchChatInCache(hint) {
     .trim()
     .toLowerCase();
   if (!needle) return null;
+  const hintKind = hint.kind === "group" ? "group" : "contact";
   return (
-    chatsCache.find(
-      (c) =>
-        String(c.name || "")
-          .trim()
-          .toLowerCase() === needle,
-    ) || null
+    chatsCache.find((c) => {
+      const name = String(c.name || "")
+        .trim()
+        .toLowerCase();
+      if (name !== needle) return false;
+      const kind = c.kind === "group" ? "group" : "contact";
+      return kind === hintKind;
+    }) || null
   );
 }
 
@@ -1300,6 +1303,8 @@ async function saveSummaryPrefs(opts = {}) {
         kind: chat?.kind || "contact",
         phone: chat?.phone ?? null,
       },
+      // Shallow sync only when Access is toggled on — not on schedule autosave.
+      pullSnapshot: opts.reason === "toggle" && syncOn,
     });
 
     if (row) {

@@ -129,4 +129,40 @@ describe("store allowlist + sync identity", () => {
     assert.equal(store.getAiSettings().apiKeySet, true);
     assert.equal(store.getAiGatewayApiKey(), "sk-test-plain");
   });
+
+  it("clears saved key when Base URL origin changes without a new key", () => {
+    store.setAiSettings({
+      apiKey: "sk-vercel",
+      baseUrl: "https://ai-gateway.vercel.sh/v1",
+    });
+    assert.equal(store.getAiGatewayApiKey(), "sk-vercel");
+    store.setAiSettings({
+      baseUrl: "https://api.openai.com/v1",
+    });
+    assert.equal(store.getAiGatewayApiKey(), "");
+    assert.equal(store.getAiSettings().apiKeySet, false);
+  });
+
+  it("keeps key when Base URL stays on the same origin", () => {
+    store.setAiSettings({
+      apiKey: "sk-keep",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    store.setAiSettings({
+      baseUrl: "https://api.openai.com/v1/",
+      model: "gpt-4.1-mini",
+    });
+    assert.equal(store.getAiGatewayApiKey(), "sk-keep");
+  });
+
+  it("include kind in allowlist policy entries", () => {
+    store.upsertChats([
+      { id: "g1@g.us", name: "Crew", kind: "group" },
+      { id: "c1@c.us", name: "Crew", kind: "contact", phone: "+15550002222" },
+    ]);
+    store.setChatSynced("g1@g.us", true, { name: "Crew", kind: "group" });
+    const policy = store.getAllowlistPolicy();
+    assert.ok(policy.entries.some((e) => e.name === "crew" && e.kind === "group"));
+    assert.ok(!policy.entries.some((e) => e.name === "crew" && e.kind === "contact"));
+  });
 });

@@ -576,6 +576,12 @@ body {
   display: none !important;
 }
 
+.access-followup {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
 .mode-fieldset {
   border: 0;
   margin: 0 0 4px;

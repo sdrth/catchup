@@ -44,7 +44,7 @@ const {
 } = require("./db/store");
 const { attachWhatsAppCapture } = require("./whatsapp/capture");
 const { runSummaryForChat, tickSummaries, getLookbackState } = require("./ai/summarize");
-const { testGatewayConnection } = require("./ai/gateway");
+const { testGatewayConnection, sameOrigin } = require("./ai/gateway");
 
 const SIDEBAR_WIDTH = 84;
 const APP_NAME = "Catchup";
@@ -178,7 +178,8 @@ function pushCapturePolicy() {
 /**
  * Reading what WhatsApp Web already has loaded is local and never throttled.
  * Only the deep path (loadEarlierMsgs asks WhatsApp for older history) is
- * rate-limited, and hitting that limit just downgrades to a shallow read.
+ * rate-limited, and only when the caller explicitly requests deep.
+ * @param {{ deep?: boolean }} [opts]
  * @returns {{
  *   ok: boolean,
  *   reason?: 'no_view',
@@ -186,15 +187,18 @@ function pushCapturePolicy() {
  *   deepRetryAfterMs?: number,
  * }}
  */
-function requestWhatsAppSnapshot() {
-  // Reading already-loaded WhatsApp Web data is local — never throttle that.
-  // Only deep earlier-history fetches are rate-limited; over limit → shallow.
-  const deepGate = consumeRateLimit("deep_load", {
-    max: 6,
-    windowMs: 60 * 60 * 1000,
-  });
-  const allowDeep = deepGate.allowed;
-  const deepRetryAfterMs = allowDeep ? 0 : deepGate.retryAfterMs || 0;
+function requestWhatsAppSnapshot(opts = {}) {
+  const wantDeep = Boolean(opts.deep);
+  let allowDeep = false;
+  let deepRetryAfterMs = 0;
+  if (wantDeep) {
+    const deepGate = consumeRateLimit("deep_load", {
+      max: 6,
+      windowMs: 60 * 60 * 1000,
+    });
+    allowDeep = deepGate.allowed;
+    deepRetryAfterMs = allowDeep ? 0 : deepGate.retryAfterMs || 0;
+  }
 
   pushCapturePolicy();
   if (whatsappCapture?.forceSnapshot) {
@@ -649,7 +653,8 @@ function afterAllowlistChange({ pullSnapshot = false } = {}) {
 ipcMain.handle("db:listChats", () => listChats());
 ipcMain.handle("whatsapp:getActiveChat", () => activeWaChat);
 ipcMain.handle("whatsapp:forceSync", () => {
-  const result = requestWhatsAppSnapshot();
+  // Explicit Sync / Summarize-now path may request earlier history (rate-limited).
+  const result = requestWhatsAppSnapshot({ deep: true });
   if (!result.ok && result.reason === "no_view") {
     return {
       ...result,
@@ -676,7 +681,13 @@ ipcMain.handle("chat:save", (_event, chatId, opts) => {
     return null;
   }
   const row = saveChatSidebar(chatId, opts);
-  afterAllowlistChange({ pullSnapshot: Boolean(opts.synced || opts.summary?.enabled) });
+  // Snapshot only when the renderer asks (Access toggle-on). Schedule autosave
+  // must not burn deep quota or re-scrape on every field edit.
+  const pullSnapshot =
+    opts.pullSnapshot != null
+      ? Boolean(opts.pullSnapshot)
+      : Boolean(opts.synced || opts.summary?.enabled);
+  afterAllowlistChange({ pullSnapshot });
   return row;
 });
 ipcMain.handle("db:setChatSynced", (_event, chatId, synced, meta) => {
@@ -693,10 +704,13 @@ ipcMain.handle("ai:setSettings", (_event, patch) => {
 ipcMain.handle("ai:testConnection", async (_event, draft) => {
   const settings = getAiSettings();
   const patch = draft && typeof draft === "object" ? draft : {};
-  const apiKey =
-    String(patch.apiKey || "").trim() || getAiGatewayApiKey() || "";
   const baseUrl =
     String(patch.baseUrl || "").trim() || settings.baseUrl || "";
+  // The stored key only goes to the host it was saved for; testing a
+  // different provider needs its own key typed in.
+  const apiKey =
+    String(patch.apiKey || "").trim() ||
+    (sameOrigin(baseUrl, settings.baseUrl) ? getAiGatewayApiKey() : "");
   const model = String(patch.model || "").trim() || settings.model || "";
   const zeroDataRetention =
     patch.zeroDataRetention != null
