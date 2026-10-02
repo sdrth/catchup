@@ -27,8 +27,8 @@ function toJsonLiteral(value) {
  * @param {Electron.WebContents} webContents
  */
 function attachWhatsAppCapture(webContents) {
-  /** @type {{ ids: string[], names: string[] }} */
-  let policy = { ids: [], names: [] };
+  /** @type {{ ids: string[], names: string[], entries: Array<{ name: string, kind: string }> }} */
+  let policy = { ids: [], names: [], entries: [] };
 
   const inject = () => {
     try {
@@ -54,13 +54,24 @@ function attachWhatsAppCapture(webContents) {
 
   return {
     /**
-     * @param {{ ids?: string[], names?: string[] }} next
+     * @param {{ ids?: string[], names?: string[], entries?: Array<{ name: string, kind: string }> }} next
      */
     setPolicy(next) {
       policy = {
         ids: Array.isArray(next?.ids) ? next.ids.map(String) : [],
         names: Array.isArray(next?.names)
           ? next.names.map((n) => String(n).toLowerCase())
+          : [],
+        entries: Array.isArray(next?.entries)
+          ? next.entries.map((e) => ({
+              name: String(e?.name || "").toLowerCase(),
+              kind:
+                e?.kind === "group"
+                  ? "group"
+                  : e?.kind === "contact"
+                    ? "contact"
+                    : "",
+            }))
           : [],
       };
       if (webContents.isDestroyed()) return;

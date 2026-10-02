@@ -1,4 +1,5 @@
 const Database = require("better-sqlite3");
+const { assertSafeBaseUrl, sameOrigin } = require("../ai/gateway");
 const { ensureDbDir, getDbPath, redactHomePath } = require("./paths");
 
 /** @type {import("better-sqlite3").Database | null} */
@@ -479,14 +480,21 @@ function upsertMessages(chatId, chatName, kind, messages, phone = null) {
       now,
     );
 
+  // On conflict, keep the earlier timestamp. DOM rescrapes invent near-now
+  // fakes that would otherwise clobber real Store timestamps and scramble
+  // summary watermarks / message order.
   const stmt = database.prepare(`
     INSERT INTO messages (id, chat_id, body, sender_name, from_me, timestamp, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       body = excluded.body,
-      sender_name = excluded.sender_name,
+      sender_name = COALESCE(excluded.sender_name, messages.sender_name),
       from_me = excluded.from_me,
-      timestamp = excluded.timestamp
+      timestamp = CASE
+        WHEN messages.timestamp > 0 AND excluded.timestamp > 0
+          THEN MIN(messages.timestamp, excluded.timestamp)
+        ELSE COALESCE(NULLIF(excluded.timestamp, 0), messages.timestamp)
+      END
   `);
 
   const insertMany = database.transaction((rows) => {
@@ -627,11 +635,11 @@ function resolveCatalogChat(chat) {
   const rows = getDb()
     .prepare(`SELECT id, name, kind, phone FROM chats`)
     .all();
-  /** @type {typeof rows[number] | null} */
-  let soft = null;
   for (const row of rows) {
     const rowName = cleanChatName(row.name).toLowerCase();
     if (!rowName || rowName !== needle) continue;
+    // Same cleaned title + same kind only — never cross-kind soft match
+    // (e.g. a contact named like a group).
     if (normalizeKind(row.kind, row.id) === kind) {
       return {
         id: row.id,
@@ -640,15 +648,6 @@ function resolveCatalogChat(chat) {
         phone: phone || normalizePhone(row.phone, kind),
       };
     }
-    soft = soft || row;
-  }
-  if (soft) {
-    return {
-      id: soft.id,
-      name: cleaned || cleanChatName(soft.name) || soft.id,
-      kind: normalizeKind(soft.kind, soft.id),
-      phone: phone || normalizePhone(soft.phone, kind),
-    };
   }
 
   if (!chat.id) return null;
@@ -679,12 +678,16 @@ function ensureAllowlisted(chatId) {
 
 /**
  * Insert/update one chat row without consolidate/prune (safe for Sync toggle).
+ * Always creates a row when missing so allowlist / summary_prefs FK inserts
+ * cannot fail for a chat the Access panel just offered.
  * @param {{ id: string, name?: string, kind?: string, phone?: string | null }} chat
  */
 function ensureChatRow(chat) {
   if (!chat?.id) return;
-  const name = cleanChatName(chat.name);
-  if (!name) return;
+  const name =
+    cleanChatName(chat.name) ||
+    cleanChatName(String(chat.id)) ||
+    String(chat.id);
   const kind = normalizeKind(chat.kind, chat.id);
   const phone =
     normalizePhone(chat.phone, kind) || phoneFromChatId(chat.id, kind);
@@ -718,15 +721,14 @@ function setChatSynced(chatId, synced, meta) {
   if (!chatId) throw new Error("chatId required");
 
   if (synced) {
+    // chats row must exist before allowlist (FK).
+    ensureChatRow({
+      id: chatId,
+      name: meta?.name || chatId,
+      kind: meta?.kind || "contact",
+      phone: meta?.phone ?? null,
+    });
     ensureAllowlisted(chatId);
-    if (meta?.name) {
-      ensureChatRow({
-        id: chatId,
-        name: meta.name,
-        kind: meta.kind || "contact",
-        phone: meta.phone ?? null,
-      });
-    }
   } else {
     const prefs = getDb()
       .prepare(`SELECT enabled FROM summary_prefs WHERE chat_id = ?`)
@@ -762,6 +764,13 @@ function saveChatSidebar(chatId, opts) {
   if (!chatId) throw new Error("chatId required");
   const summarizeOn = Boolean(opts?.summary?.enabled);
   const synced = Boolean(opts?.synced) || summarizeOn;
+  // Ensure the catalog row first — summary_prefs and allowlist both FK to chats.
+  ensureChatRow({
+    id: chatId,
+    name: opts?.meta?.name || chatId,
+    kind: opts?.meta?.kind || "contact",
+    phone: opts?.meta?.phone ?? null,
+  });
   setSummaryPrefs(chatId, { ...(opts?.summary || {}), enabled: summarizeOn });
   setChatSynced(chatId, synced, opts?.meta);
   return getChatById(chatId);
@@ -769,6 +778,8 @@ function saveChatSidebar(chatId, opts) {
 
 const DEFAULT_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 const DEFAULT_AI_GATEWAY_MODEL = "anthropic/claude-sonnet-4.5";
+// Keep these in sync with DEFAULT_BASE_URL in app/src/ai/gateway.js and the
+// Vercel preset in app/src/renderer/renderer.js.
 
 const DEFAULT_SYSTEM_PROMPT = `You are Catchup's chat summarizer. Summarize WhatsApp conversations clearly and factually.
 
@@ -797,6 +808,68 @@ function getAiSettings() {
   };
 }
 
+const SECRET_ENC_PREFIX = "enc:v1:";
+
+/**
+ * Electron safeStorage when running inside the app; null in plain Node (MCP/tests).
+ * @returns {null | { encryptString: (s: string) => Buffer, decryptString: (b: Buffer) => string }}
+ */
+function getSafeStorage() {
+  // Never require("electron") outside the Electron runtime — that can spawn
+  // / download the Electron binary from plain Node (MCP, pnpm test).
+  if (!process.versions.electron) return null;
+  try {
+    const { safeStorage } = require("electron");
+    if (
+      safeStorage &&
+      typeof safeStorage.isEncryptionAvailable === "function" &&
+      safeStorage.isEncryptionAvailable()
+    ) {
+      return safeStorage;
+    }
+  } catch {
+    // unavailable
+  }
+  return null;
+}
+
+/**
+ * @param {string} plain
+ * @returns {string} value to persist in meta
+ */
+function sealSecret(plain) {
+  const value = String(plain || "");
+  if (!value) return "";
+  const ss = getSafeStorage();
+  if (!ss) return value;
+  try {
+    return SECRET_ENC_PREFIX + ss.encryptString(value).toString("base64");
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * @param {string | null} stored
+ * @returns {string}
+ */
+function openSecret(stored) {
+  const value = String(stored || "");
+  if (!value) return "";
+  if (!value.startsWith(SECRET_ENC_PREFIX)) return value;
+  const ss = getSafeStorage();
+  if (!ss) {
+    throw new Error(
+      "Encrypted gateway API key can only be read inside the Catchup app.",
+    );
+  }
+  try {
+    return ss.decryptString(Buffer.from(value.slice(SECRET_ENC_PREFIX.length), "base64"));
+  } catch {
+    throw new Error("Could not decrypt the saved gateway API key.");
+  }
+}
+
 /**
  * @param {{
  *   apiKey?: string | null,
@@ -807,14 +880,26 @@ function getAiSettings() {
  * }} patch
  */
 function setAiSettings(patch) {
-  if (patch.apiKey != null) {
-    const key = String(patch.apiKey).trim();
-    if (key) setMeta("ai_gateway_api_key", key);
-  }
+  // Validate before writing anything so a rejected Base URL can't leave the
+  // rest of the patch half-saved.
+  let resolvedBaseUrl = null;
   if (patch.baseUrl != null) {
     const url = String(patch.baseUrl).trim().replace(/\/$/, "");
-    setMeta("ai_gateway_base_url", url || DEFAULT_AI_GATEWAY_BASE_URL);
+    resolvedBaseUrl = url || DEFAULT_AI_GATEWAY_BASE_URL;
+    assertSafeBaseUrl(resolvedBaseUrl);
   }
+  const newKey = patch.apiKey != null ? String(patch.apiKey).trim() : "";
+  if (resolvedBaseUrl != null) {
+    // A stored key belongs to the host it was entered for — don't carry it
+    // over to a different provider the user just switched to.
+    const previous =
+      getMeta("ai_gateway_base_url") || DEFAULT_AI_GATEWAY_BASE_URL;
+    if (!newKey && !sameOrigin(previous, resolvedBaseUrl)) {
+      setMeta("ai_gateway_api_key", "");
+    }
+    setMeta("ai_gateway_base_url", resolvedBaseUrl);
+  }
+  if (newKey) setMeta("ai_gateway_api_key", sealSecret(newKey));
   if (patch.model != null) {
     const model = String(patch.model).trim();
     if (model) setMeta("ai_gateway_model", model);
@@ -829,7 +914,18 @@ function setAiSettings(patch) {
 }
 
 function getAiGatewayApiKey() {
-  return getMeta("ai_gateway_api_key") || "";
+  const stored = getMeta("ai_gateway_api_key");
+  if (!stored) return "";
+  const plain = openSecret(stored);
+  // Migrate plaintext → encrypted when safeStorage becomes available.
+  if (plain && !String(stored).startsWith(SECRET_ENC_PREFIX) && getSafeStorage()) {
+    try {
+      setMeta("ai_gateway_api_key", sealSecret(plain));
+    } catch {
+      // leave plaintext if re-seal fails
+    }
+  }
+  return plain;
 }
 
 /**
@@ -866,6 +962,13 @@ function clearSummariesForChat(chatId) {
 function setSummaryPrefs(chatId, patch) {
   if (!chatId) throw new Error("chatId required");
   const database = getDb();
+  // summary_prefs.chat_id FK → chats.id; create a stub row if missing.
+  const existingChat = database
+    .prepare(`SELECT id FROM chats WHERE id = ? LIMIT 1`)
+    .get(chatId);
+  if (!existingChat) {
+    ensureChatRow({ id: chatId, name: chatId, kind: "contact" });
+  }
   const existing = database
     .prepare(`SELECT * FROM summary_prefs WHERE chat_id = ?`)
     .get(chatId);
@@ -1159,6 +1262,23 @@ function countMessagesSince(chatId, afterTs) {
 }
 
 /**
+ * @param {string} chatId
+ * @returns {number} ms epoch, or 0 if none
+ */
+function getLatestMessageTimestamp(chatId) {
+  if (!chatId) return 0;
+  const row = getDb()
+    .prepare(
+      `
+      SELECT MAX(timestamp) AS ts FROM messages
+      WHERE chat_id = ?
+    `,
+    )
+    .get(chatId);
+  return Number(row?.ts) || 0;
+}
+
+/**
  * First page for a chat's Access panel: the latest summary plus the start
  * of its "earlier summaries" history. Further pages come from
  * `getEarlierSummaries`.
@@ -1238,7 +1358,9 @@ function isChatSynced(chatId) {
 
 /**
  * Map an incoming chat to an allowlisted row. DOM hash IDs churn when titles
- * change case / unread prefixes, so fall back to cleaned name (kind soft).
+ * change case / unread prefixes, so fall back to cleaned name + kind, then
+ * phone. Never soft-match across kinds by title alone (that mis-routes
+ * messages when a contact and group share a cleaned name).
  * @param {{ id?: string, name?: string, kind?: string, phone?: string | null } | null | undefined} chat
  * @returns {{ id: string, name: string, kind: string, phone: string | null } | null}
  */
@@ -1271,48 +1393,35 @@ function resolveSyncedChat(chat) {
   if (rows.length === 0) return null;
 
   const needle = (cleaned || "").toLowerCase();
-  /** @type {typeof rows[number] | null} */
-  let softName = null;
 
   if (needle) {
     for (const row of rows) {
       const rowName = cleanChatName(row.name).toLowerCase();
       if (!rowName || rowName !== needle) continue;
-      if (normalizeKind(row.kind, row.id) === kind) {
-        return {
-          id: row.id,
-          name: cleaned,
-          kind,
-          phone: phone || normalizePhone(row.phone, kind),
-        };
-      }
-      softName = softName || row;
+      if (normalizeKind(row.kind, row.id) !== kind) continue;
+      return {
+        id: row.id,
+        name: cleaned,
+        kind,
+        phone: phone || normalizePhone(row.phone, kind),
+      };
     }
   }
 
   if (phone) {
     for (const row of rows) {
+      const rowKind = normalizeKind(row.kind, row.id);
       const rowPhone =
-        normalizePhone(row.phone, normalizeKind(row.kind, row.id)) ||
-        phoneFromChatId(row.id, normalizeKind(row.kind, row.id));
+        normalizePhone(row.phone, rowKind) || phoneFromChatId(row.id, rowKind);
       if (rowPhone && rowPhone === phone) {
         return {
           id: row.id,
           name: cleaned || cleanChatName(row.name) || row.id,
-          kind: normalizeKind(row.kind, row.id),
+          kind: rowKind,
           phone,
         };
       }
     }
-  }
-
-  if (softName) {
-    return {
-      id: softName.id,
-      name: cleaned || cleanChatName(softName.name) || softName.id,
-      kind: normalizeKind(softName.kind, softName.id),
-      phone: phone || normalizePhone(softName.phone, kind),
-    };
   }
 
   return null;
@@ -1345,6 +1454,11 @@ function setAllowlist(chatIds) {
   const apply = database.transaction((selectedIds) => {
     clear.run();
     for (const id of selectedIds) {
+      ensureChatRow({
+        id,
+        name: id,
+        kind: String(id).includes("@g.us") ? "group" : "contact",
+      });
       insert.run(id, now);
     }
     // Drop message bodies for chats no longer selected.
@@ -1379,19 +1493,28 @@ function listAllowedChats() {
 }
 
 /**
- * Compact allowlist payload for the WhatsApp inject (ids + lowercase names).
- * @returns {{ ids: string[], names: string[] }}
+ * Compact allowlist payload for the WhatsApp inject.
+ * `entries` carries cleaned name + kind so inject never treats a contact as
+ * an allowlisted group (or vice versa) that shares a title.
+ * @returns {{ ids: string[], names: string[], entries: Array<{ name: string, kind: string }> }}
  */
 function getAllowlistPolicy() {
   const rows = listAllowedChats();
   const ids = [];
   const names = [];
+  const entries = [];
   for (const row of rows) {
     if (row.id) ids.push(String(row.id));
     const cleaned = cleanChatName(row.name).toLowerCase();
-    if (cleaned) names.push(cleaned);
+    if (cleaned) {
+      names.push(cleaned);
+      entries.push({
+        name: cleaned,
+        kind: normalizeKind(row.kind, row.id),
+      });
+    }
   }
-  return { ids, names };
+  return { ids, names, entries };
 }
 
 const RATE_META_KEY = "wa_rate_limit_v1";
@@ -1665,6 +1788,7 @@ module.exports = {
   insertSummary,
   getMessagesSince,
   countMessagesSince,
+  getLatestMessageTimestamp,
   listEnabledSummaryPrefs,
   setMeta,
   getDrawerWidth,

@@ -7,10 +7,13 @@ Catchup is meant to be **cloned and run from source**. It does not ship maintain
 ```bash
 cd app
 pnpm install
+pnpm test
 pnpm start
 ```
 
 `pnpm install` renames the local Electron helper to **Catchup.app** so the Dock label is Catchup during development.
+
+Build scripts: `app/pnpm-workspace.yaml` allows Electron’s install script and skips `better-sqlite3`’s `node-gyp` rebuild (v13 ships platform prebuilds). There is no `pnpm build` script — use `pnpm start` or `pnpm package`.
 
 | Path | Role |
 | --- | --- |
